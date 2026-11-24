@@ -34,6 +34,12 @@ constexpr usize kMaxCryptoBytes = 1U << 20U;
 constexpr u32 kMaxSentPackets = 1U << 16U;
 // Past sent_packets, per space: what ACK-only packets and probes have when data has filled the rest.
 constexpr u32 kSentPacketReserve = 8U;
+// The room a space's storage keeps past what it holds (grow_sent): the reserve, two probes and the next packet.
+constexpr usize kSentHeadroom = usize{kSentPacketReserve} + 3U;
+constexpr usize kFirstSentEntries = 2U * kSentHeadroom;
+constexpr u32 kFirstFrames = 64U;                // the ledger's first records
+constexpr u64 kTokenMask = (u64{1} << 31U) - 1U; // a record's number in a QuicSentPacket::token: never kNoRecord
+
 constexpr usize kMinUsefulPacket = 64U; // a server with less credit than this waits for a datagram
 
 constexpr usize kPullChunk = 512U;
@@ -111,6 +117,17 @@ constexpr u64 kNoSequence = kQuicNoSequence; // a path with no peer connection I
 [[nodiscard]] constexpr u64 min_u64(u64 a, u64 b) noexcept
 {
     return (a < b) ? a : b;
+}
+
+// A space's first sent-packet storage and the ledger's first records, for a checked configuration (config_valid).
+[[nodiscard]] usize first_storage(u32 sent_packets) noexcept
+{
+    return static_cast<usize>(min_u64(kFirstSentEntries, u64{sent_packets} + kSentPacketReserve));
+}
+
+[[nodiscard]] u32 first_ledger(u32 sent_frames) noexcept
+{
+    return static_cast<u32>(min_u64(kFirstFrames, sent_frames));
 }
 
 [[nodiscard]] constexpr u64 max_u64(u64 a, u64 b) noexcept
@@ -286,36 +303,37 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
                                            : m_entropy.init(crypto::AlgorithmId::Siphash24, config.entropy_seed);
     m_config.entropy_seed = {};
 
-    const usize per_space = usize{config.sent_packets} + kSentPacketReserve;
-    QuicSentEntry* const entries = memory::try_construct_array<QuicSentEntry>(allocator, kQuicSpaces * per_space);
-    SentFrame* const frames = memory::try_construct_array<SentFrame>(allocator, config.sent_frames);
+    // Each space's first storage, and the ledger's (sent_packets and sent_frames were checked: config_valid).
+    const usize first = first_storage(config.sent_packets);
+    const u32 ledger = first_ledger(config.sent_frames);
+    // Further path slots only for a limit above path ID 0 (RFC 10069 section 2.1).
+    const bool further = config.parameters.has_initial_max_path_id && config.parameters.initial_max_path_id != 0U;
+    const usize spaces = further ? kNumberSpaces : kQuicSpaces;
+    QuicSentEntry* entries[kNumberSpaces] = {};
+    bool stored = true;
+    for (usize index = 0U; index < spaces; ++index)
+    {
+        entries[index] = memory::try_construct_array<QuicSentEntry>(allocator, first);
+        stored = stored && entries[index] != nullptr;
+    }
+    SentFrame* const frames = memory::try_construct_array<SentFrame>(allocator, ledger);
     const bool streams = m_streams.init(allocator, config.streams, config.side);
     const bool datagrams = m_datagrams.init(allocator, config.datagrams);
     const usize early_bytes = early_context_bytes(config);
-    const usize held_bytes = usize{config.held_packets} * config.max_datagram_bytes;
     u8* const early = (early_bytes != 0U) ? memory::try_construct_array<u8>(allocator, early_bytes) : nullptr;
-    u8* const held = (held_bytes != 0U) ? memory::try_construct_array<u8>(allocator, held_bytes) : nullptr;
-    Held* const held_entries =
-        (held_bytes != 0U) ? memory::try_construct_array<Held>(allocator, config.held_packets) : nullptr;
-    // Further path slots only for a limit above path ID 0 (RFC 10069 section 2.1).
-    const bool further = config.parameters.has_initial_max_path_id && config.parameters.initial_max_path_id != 0U;
     PathSlot* const slots = further ? memory::try_construct_array<PathSlot>(allocator, kFurtherSlots) : nullptr;
-    QuicSentEntry* const slot_entries =
-        further ? memory::try_construct_array<QuicSentEntry>(allocator, kFurtherSlots * per_space) : nullptr;
     void* const recovery = allocator.try_allocate(sizeof(QuicRecovery), alignof(QuicRecovery));
-    if (seeded != crypto::CryptoError::None || entries == nullptr || frames == nullptr || recovery == nullptr ||
-        !streams || !datagrams || (early_bytes != 0U && early == nullptr) ||
-        (held_bytes != 0U && (held == nullptr || held_entries == nullptr)) ||
-        (further && (slots == nullptr || slot_entries == nullptr)))
+    if (seeded != crypto::CryptoError::None || !stored || frames == nullptr || recovery == nullptr || !streams ||
+        !datagrams || (early_bytes != 0U && early == nullptr) || (further && slots == nullptr))
     {
-        memory::destroy_array(allocator, entries, kQuicSpaces * per_space);
-        memory::destroy_array(allocator, frames, config.sent_frames);
+        for (QuicSentEntry* space : entries)
+        {
+            memory::destroy_array(allocator, space, (space != nullptr) ? first : 0U);
+        }
+        memory::destroy_array(allocator, frames, ledger);
         memory::destroy_array(allocator, static_cast<u8*>(recovery), sizeof(QuicRecovery));
         memory::destroy_array(allocator, early, early_bytes);
-        memory::destroy_array(allocator, held, held_bytes);
-        memory::destroy_array(allocator, held_entries, config.held_packets);
         memory::destroy_array(allocator, slots, further ? kFurtherSlots : 0U);
-        memory::destroy_array(allocator, slot_entries, further ? kFurtherSlots * per_space : 0U);
         return;
     }
     if (early_bytes != 0U && !config.early_context.empty())
@@ -325,29 +343,30 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     m_config.early_context = {};
     m_early_context = early;
     m_early_context_bytes = early_bytes;
-    m_held_bytes = held;
-    m_held = held_entries;
     QuicRecoveryConfig recovery_config;
     recovery_config.side = config.side;
     recovery_config.initial_rtt_ns = config.initial_rtt_ns;
     recovery_config.local_max_ack_delay_ns = config.parameters.max_ack_delay * kNsPerMs;
     recovery_config.local_ack_delay_exponent = config.parameters.ack_delay_exponent;
     recovery_config.reserved_entries = kSentPacketReserve;
-    m_recovery = new (recovery) QuicRecovery(recovery_config, cont::Span<QuicSentEntry>(entries, per_space),
-                                             cont::Span<QuicSentEntry>(entries + per_space, per_space),
-                                             cont::Span<QuicSentEntry>(entries + (2U * per_space), per_space));
+    for (usize index = 0U; index < spaces; ++index)
+    {
+        m_sent[index] = SentStore{entries[index], first};
+    }
+    m_recovery = new (recovery) QuicRecovery(recovery_config, cont::Span<QuicSentEntry>(entries[0], first),
+                                             cont::Span<QuicSentEntry>(entries[1], first),
+                                             cont::Span<QuicSentEntry>(entries[2], first));
     // The policy, the sizes and the handover were checked (config_valid).
     static_cast<void>(m_first_control.start(path_config(config), config.path, entropy(), &m_coupling));
     m_datagram_bytes = m_first_control.datagram_bytes();
     m_first_paths.paths.open(config.path, false, 0U);
     m_slots = slots;
-    m_slot_entries = slot_entries;
     for (usize slot = 1U; further && slot < kQuicMaxPaths; ++slot)
     {
         m_tuples[slot] = &m_slots[slot - 1U].tuples;
     }
     m_frames = frames;
-    m_storage = entries;
+    m_frame_size = ledger;
 }
 
 QuicConnection::~QuicConnection() noexcept
@@ -362,19 +381,20 @@ QuicConnection::~QuicConnection() noexcept
     {
         release_crypto(level, true);
     }
-    memory::destroy_array(m_allocator, m_storage, kQuicSpaces * (usize{m_config.sent_packets} + kSentPacketReserve));
-    memory::destroy_array(m_allocator, m_frames, m_config.sent_frames);
+    for (const SentStore& store : m_sent)
+    {
+        memory::destroy_array(m_allocator, store.entries, store.size);
+    }
+    memory::destroy_array(m_allocator, m_frames, m_frame_size);
     memory::destroy_array(m_allocator, m_early_context, m_early_context_bytes);
-    memory::destroy_array(m_allocator, m_held_bytes, usize{m_config.held_packets} * m_config.max_datagram_bytes);
-    memory::destroy_array(m_allocator, m_held, m_config.held_packets);
+    release_held();
     const usize further = (m_slots != nullptr) ? kFurtherSlots : 0U;
     memory::destroy_array(m_allocator, m_slots, further);
-    memory::destroy_array(m_allocator, m_slot_entries, further * (usize{m_config.sent_packets} + kSentPacketReserve));
 }
 
 u32 QuicConnection::buffer_allocations() const noexcept
 {
-    return m_streams.buffer_allocations() + m_crypto_allocations;
+    return m_streams.buffer_allocations() + m_crypto_allocations + m_table_allocations;
 }
 
 usize QuicConnection::buffer_bytes() const noexcept
@@ -383,6 +403,20 @@ usize QuicConnection::buffer_bytes() const noexcept
     for (const Level& level : m_levels)
     {
         total += quic_store_bytes(level.in_store, 1U) + quic_store_bytes(level.out_store, 2U);
+    }
+    return total;
+}
+
+usize QuicConnection::table_bytes() const noexcept
+{
+    usize total = usize{m_frame_size} * sizeof(SentFrame);
+    for (const SentStore& store : m_sent)
+    {
+        total += store.size * sizeof(QuicSentEntry);
+    }
+    if (m_held != nullptr)
+    {
+        total += usize{m_config.held_packets} * (m_config.max_datagram_bytes + sizeof(Held));
     }
     return total;
 }
@@ -935,7 +969,23 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
 void QuicConnection::hold(QuicPacketType type, cont::ConstSpan<u8> packet, Ecn ecn) noexcept
 {
     const usize slot = m_config.max_datagram_bytes;
-    if (m_held_count == m_config.held_packets || packet.size() > slot)
+    if (m_held == nullptr && m_config.held_packets != 0U && packet.size() <= slot)
+    {
+        u8* const bytes = memory::try_allocate_array<u8>(m_allocator, usize{m_config.held_packets} * slot);
+        Held* const entries = memory::try_construct_array<Held>(m_allocator, m_config.held_packets);
+        if (bytes != nullptr && entries != nullptr)
+        {
+            m_held_bytes = bytes;
+            m_held = entries;
+            m_table_allocations += 2U;
+        }
+        else
+        {
+            memory::deallocate_array(m_allocator, bytes);
+            memory::destroy_array(m_allocator, entries, m_config.held_packets);
+        }
+    }
+    if (m_held == nullptr || m_held_count == m_config.held_packets || packet.size() > slot)
     {
         ++m_counters.packets_dropped; // the peer sends it again
         return;
@@ -987,6 +1037,19 @@ void QuicConnection::read_held(u64 now_ns) noexcept
         }
         m_held_count = kept;
     }
+    if (m_held != nullptr && m_held_count == 0U)
+    {
+        release_held();
+    }
+}
+
+void QuicConnection::release_held() noexcept
+{
+    memory::deallocate_array(m_allocator, m_held_bytes);
+    memory::destroy_array(m_allocator, m_held, m_config.held_packets);
+    m_held_bytes = nullptr;
+    m_held = nullptr;
+    m_held_count = 0U;
 }
 
 bool QuicConnection::stateless_reset(cont::ConstSpan<u8> datagram, u64 now_ns) noexcept
@@ -1846,6 +1909,7 @@ void QuicConnection::discard_space(QuicSpace space, u64 now_ns) noexcept
     m_space_gone[index] = true;
     m_numbers[number_space(space, 0U)].probes = 0U; // never the Application space, which is never discarded
     static_cast<void>(m_recovery->discard(space, now_ns, m_events));
+    static_cast<void>(resize_sent(space, 0U, 0U)); // nothing outstanding: it allocates nothing and is never refused
     release_crypto(m_levels[index], true); // nothing of the level is sent or read again (RFC 9001 section 4.9)
 }
 
@@ -2333,14 +2397,20 @@ bool QuicConnection::record(QuicSpace space, u64 packet, u8 kind, const QuicStre
     {
         return false;
     }
-    const u32 at = (m_frame_head + m_frame_count) % m_config.sent_frames;
-    SentFrame& sent = m_frames[at];
+    if (m_frame_count == m_frame_size &&
+        !resize_ledger(static_cast<u32>(min_u64(m_config.sent_frames, 2U * u64{m_frame_size}))))
+    {
+        m_ledger_refused = true; // the frame is in the packet already: write_packet closes
+        return false;
+    }
+    const u64 number = m_frame_head + m_frame_count;
+    SentFrame& sent = m_frames[frame_slot(m_frame_count)];
     sent.packet = packet;
     sent.frame = frame;
     sent.space = static_cast<u8>(space);
     sent.path = static_cast<u8>((space == QuicSpace::Application) ? send_slot() : 0U); // as write_packet's slot
     sent.kind = kind;
-    written.token = (written.token == kNoRecord) ? at : written.token;
+    written.token = (written.token == kNoRecord) ? static_cast<u32>(number & kTokenMask) : written.token;
     ++m_frame_count;
     return true;
 }
@@ -2349,10 +2419,10 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
 {
     if (packet.token != kNoRecord)
     {
-        for (u32 at = packet.token, walked = 0U; walked < m_config.sent_frames;
-             at = (at + 1U) % m_config.sent_frames, ++walked)
+        // Records freed since name an offset past the count (mod 2^31).
+        for (u64 at = (u64{packet.token} - m_frame_head) & kTokenMask; at < m_frame_count; ++at)
         {
-            SentFrame& frame = m_frames[at];
+            SentFrame& frame = m_frames[frame_slot(at)];
             if (frame.kind == 0U || frame.packet != packet.number || frame.space != static_cast<u8>(space) ||
                 frame.path != packet.path)
             {
@@ -2487,9 +2557,10 @@ void QuicConnection::settle_frame(SentFrame& frame, Settle how) noexcept
 
 void QuicConnection::free_settled_frames() noexcept
 {
-    while (m_frame_count > 0U && m_frames[m_frame_head].kind == 0U)
+    while (m_frame_count > 0U && m_frames[m_frame_at].kind == 0U)
     {
-        m_frame_head = (m_frame_head + 1U) % m_config.sent_frames;
+        ++m_frame_head;
+        m_frame_at = (m_frame_at + 1U == m_frame_size) ? 0U : m_frame_at + 1U;
         --m_frame_count;
     }
 }
@@ -2500,9 +2571,9 @@ void QuicConnection::release_frames(usize slot) noexcept
     // acknowledgement or loss of one finds no record (settle() stops at a settled or reused one) and moves only
     // recovery and the slot's controller, so nothing is counted twice and the ledger's head is never held.
     const auto application = static_cast<u8>(QuicSpace::Application);
-    for (u32 at = m_frame_head, walked = 0U; walked < m_frame_count; at = (at + 1U) % m_config.sent_frames, ++walked)
+    for (u64 at = 0U; at < m_frame_count; ++at)
     {
-        SentFrame& frame = m_frames[at];
+        SentFrame& frame = m_frames[frame_slot(at)];
         if (frame.kind != 0U && frame.space == application && frame.path == slot)
         {
             m_counters.pto_resends += (frame.kind != kRecordPathAck) ? 1U : 0U; // an acknowledgement goes afresh
@@ -3061,6 +3132,13 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         used = closing ? write_close(space, writer.frames())
                        : write_frames(space, early, writer.frames(), number, now_ns, written);
     }
+    if (m_ledger_refused)
+    {
+        // The allocator refused the ledger room under its limit: the close goes in the next packet.
+        m_ledger_refused = false;
+        fail(QuicTransportError::InternalError, 0U, now_ns);
+        return 0U;
+    }
     // A later packet that cannot fit (a 0-RTT packet behind a full Initial) leaves the padding to this one; a path
     // frame's datagram reaches 1200 bytes as far as the amplification limit lets it (section 8.2).
     const bool padded = (pad && (last || writer.frames().size() - used < kMinUsefulPacket)) || written.path_response ||
@@ -3122,6 +3200,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
             sent.train = static_cast<u32>(min_u64(path.train(now_ns), ~u32{0}));
         }
         static_cast<void>(m_recovery->on_sent(space, sent, m_events)); // can_send held and numbers rise
+        grow_sent(space, slot);
         path.on_sent(space, sent, controlled, m_recovery->bytes_in_flight(slot), m_recovery->rtt(slot), now_ns);
         m_counters.probe_fills += written.fill ? 1U : 0U;
         if (written.eliciting && numbers.probes > 0U && carry != Carry::Probe && !off_path)
@@ -3480,6 +3559,126 @@ u64 QuicConnection::three_ptos() const noexcept
     return three_times(m_recovery->largest_probe_period_ns());
 }
 
+// ---- Growing tables ----
+
+bool QuicConnection::resize_sent(QuicSpace space, usize slot, usize size) noexcept
+{
+    QuicSentEntry* const entries =
+        (size != 0U) ? memory::try_construct_array<QuicSentEntry>(m_allocator, size) : nullptr;
+    cont::Span<QuicSentEntry> storage(entries, (entries != nullptr) ? size : 0U);
+    if ((size != 0U && entries == nullptr) || !m_recovery->swap_storage(space, storage, slot))
+    {
+        memory::destroy_array(m_allocator, entries, (entries != nullptr) ? size : 0U);
+        return false;
+    }
+    SentStore& store = m_sent[number_space(space, slot)];
+    memory::destroy_array(m_allocator, store.entries, store.size);
+    store = SentStore{entries, size};
+    m_table_allocations += (entries != nullptr) ? 1U : 0U;
+    return true;
+}
+
+void QuicConnection::grow_sent(QuicSpace space, usize slot) noexcept
+{
+    const usize size = m_sent[number_space(space, slot)].size;
+    const u64 full = u64{m_config.sent_packets} + kSentPacketReserve;
+    if (size >= full)
+    {
+        return; // a long flight's every packet
+    }
+    const usize needed = m_recovery->stored(space, slot) + kSentHeadroom;
+    if (needed > size)
+    {
+        const usize grown = static_cast<usize>(min_u64(full, max_u64(2U * u64{size}, needed)));
+        m_tables_grown = resize_sent(space, slot, grown) || m_tables_grown;
+    }
+}
+
+void QuicConnection::reset_sent(usize slot) noexcept
+{
+    SentStore& store = m_sent[number_space(QuicSpace::Application, slot)];
+    const usize first = first_storage(m_config.sent_packets);
+    QuicSentEntry* const entries =
+        (store.size > first) ? memory::try_construct_array<QuicSentEntry>(m_allocator, first) : nullptr;
+    if (entries != nullptr) // refused, the closed slot keeps the larger one
+    {
+        memory::destroy_array(m_allocator, store.entries, store.size);
+        store = SentStore{entries, first};
+        ++m_table_allocations;
+    }
+}
+
+u32 QuicConnection::frame_slot(u64 at) const noexcept
+{
+    const u64 slot = m_frame_at + at; // at < m_frame_size
+    return static_cast<u32>((slot < m_frame_size) ? slot : slot - m_frame_size);
+}
+
+bool QuicConnection::resize_ledger(u32 size) noexcept
+{
+    SentFrame* const frames = memory::try_construct_array<SentFrame>(m_allocator, size);
+    if (frames == nullptr)
+    {
+        return false;
+    }
+    for (u32 at = 0U; at < m_frame_count; ++at)
+    {
+        frames[at] = m_frames[frame_slot(at)];
+    }
+    memory::destroy_array(m_allocator, m_frames, m_frame_size);
+    m_frames = frames;
+    m_frame_at = 0U;
+    m_tables_grown = m_tables_grown || size > m_frame_size;
+    m_frame_size = size;
+    ++m_table_allocations;
+    return true;
+}
+
+u64 QuicConnection::trim_ns() const noexcept
+{
+    // Never during a flight: with an ack-eliciting packet in flight the loss detection timer is armed.
+    if (!m_tables_grown || m_recovery->loss_timer_ns() != kNeverNs)
+    {
+        return kNeverNs;
+    }
+    u64 last_ns = 0U;
+    for (const Numbering& numbers : m_numbers)
+    {
+        last_ns = max_u64(last_ns, numbers.eliciting_ns);
+    }
+    return add_saturating(last_ns, three_ptos());
+}
+
+void QuicConnection::trim_tables(u64 now_ns) noexcept
+{
+    if (now_ns < trim_ns())
+    {
+        return;
+    }
+    m_tables_grown = false;
+    const usize first = first_storage(m_config.sent_packets);
+    for (usize index = 0U; index < kNumberSpaces; ++index)
+    {
+        // number_space()'s order: Initial, Handshake, then each slot's Application space.
+        const bool application = index >= kQuicSpaces - 1U;
+        const QuicSpace space = application ? QuicSpace::Application : static_cast<QuicSpace>(index);
+        const usize slot = application ? index - (kQuicSpaces - 1U) : 0U;
+        const usize size = m_sent[index].size;
+        const usize needed = m_recovery->stored(space, slot) + kSentHeadroom;
+        const usize fitted = (needed <= first) ? first : 2U * needed;
+        if (m_recovery->storage_size(space, slot) == size && fitted < size)
+        {
+            static_cast<void>(resize_sent(space, slot, fitted)); // refused, it stays
+        }
+    }
+    const u32 ledger = first_ledger(m_config.sent_frames);
+    const u32 fitted = (m_frame_count <= ledger) ? ledger : 2U * m_frame_count;
+    if (fitted < m_frame_size)
+    {
+        static_cast<void>(resize_ledger(fitted));
+    }
+}
+
 void QuicConnection::restart_idle(u64 now_ns) noexcept
 {
     m_idle_deadline_ns = (m_idle_ns == 0U) ? kNeverNs : add_saturating(now_ns, max_u64(m_idle_ns, three_ptos()));
@@ -3499,7 +3698,7 @@ u64 QuicConnection::next_timer_ns() const noexcept
     // space's full storage or keys not yet installed, which would report a timer due that nothing serves.
     u64 next =
         min_u64(min_u64(m_recovery->loss_timer_ns(), m_idle_deadline_ns), min_u64(m_previous_key_ns, m_early_key_ns));
-    next = min_u64(next, path_timer_ns());
+    next = min_u64(min_u64(next, path_timer_ns()), trim_ns());
     for (const QuicPathControl* const path : m_controls)
     {
         if (path != nullptr)
@@ -3558,6 +3757,7 @@ void QuicConnection::on_timeout(u64 now_ns) noexcept
         finish();
         return;
     }
+    trim_tables(now_ns);
     if (now_ns >= m_previous_key_ns)
     {
         m_protection.discard_previous();
@@ -4520,12 +4720,10 @@ void QuicConnection::commit_path(usize slot, u64 now_ns) noexcept
 {
     // A reclaimed slot 0's state is path ID 0's: the connection's own controller and the recovery's own, over the
     // Application packets' first storage; a further slot's is the pool's.
-    const usize per_space = usize{m_config.sent_packets} + kSentPacketReserve;
     const bool first = slot == 0U;
     QuicPathControl& control = first ? m_first_control : m_slots[slot - 1U].control;
     QuicPathRecovery& recovery = first ? m_recovery->first_path() : m_slots[slot - 1U].recovery;
-    QuicSentEntry* const entries = first ? m_storage + (quic_space_index(QuicSpace::Application) * per_space)
-                                         : m_slot_entries + ((slot - 1U) * per_space);
+    const SentStore& store = m_sent[number_space(QuicSpace::Application, slot)];
     QuicPaths& paths = tuples(slot);
     const QuicPath& from = paths.path(paths.active());
     // The handshake link's handover schedule says nothing of this one; learning may still find its own.
@@ -4535,7 +4733,7 @@ void QuicConnection::commit_path(usize slot, u64 now_ns) noexcept
     // The policy and sizes were checked (config_valid, family_base); the controller is built in place.
     static_cast<void>(control.start(config, from, entropy(), &m_coupling));
     // Free in the recovery (free_slot), with storage of its own.
-    static_cast<void>(m_recovery->open_path(slot, recovery, cont::Span<QuicSentEntry>(entries, per_space)));
+    static_cast<void>(m_recovery->open_path(slot, recovery, cont::Span<QuicSentEntry>(store.entries, store.size)));
     m_beyond_ping &= static_cast<u8>(~(1U << slot)); // nothing of the path ID the slot held before
     control.limit(peer_ceiling());
     m_controls[slot] = &control;
@@ -4713,6 +4911,7 @@ void QuicConnection::close_abandoned(u64 now_ns) noexcept
             m_event_ns = now_ns;
             static_cast<void>(m_recovery->close_path(slot, now_ns, m_events));
             static_cast<void>(m_protection.close_path(slot));
+            reset_sent(slot);
             if (entry.path_id == 0U)
             {
                 // The handshake slot is reclaimed for later path IDs (free_slot); add_path() still opens paths to

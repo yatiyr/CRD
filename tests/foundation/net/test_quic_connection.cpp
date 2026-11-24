@@ -4616,9 +4616,15 @@ usize deliver_flight(QuicConnection& to, Datagram* flight, usize count, bool ear
 TEST_CASE("QUIC connection: packets ahead of their keys are held in a bounded ring and read once the keys come",
           "[net][4.2a][quic-connection][quic-early]")
 {
-    for (const u32 ring : {8U, 1U})
+    struct Mode
     {
-        INFO("ring " << ring);
+        u32 ring;
+        bool refused; // the ring's first storage is refused
+    };
+    for (const Mode mode : {Mode{8U, false}, Mode{1U, false}, Mode{8U, true}})
+    {
+        const u32 ring = mode.ring;
+        INFO("ring " << ring << " refused " << mode.refused);
         EarlyFleet fleet;
         Tickets tickets;
         take_ticket(fleet.identity, QuicVersion::V1, tickets);
@@ -4634,16 +4640,26 @@ TEST_CASE("QUIC connection: packets ahead of their keys are held in a bounded ri
         REQUIRE(server.ready());
         Datagram flight[16];
         const usize count = early_flight(client, server, flight, 16U);
+        const usize server_tables = server.table_bytes(); // the ring is taken only while a packet waits for keys
+        const usize client_tables = client.table_bytes();
+        if (mode.refused)
+        {
+            allocator.refuse_call(allocator.calls()); // the first hold's: nothing else allocates before it
+        }
         // The 0-RTT-only datagrams arrive first: held as the ring allows, then read once the Initials gave keys.
         const usize alone = deliver_flight(server, flight, count, true);
         REQUIRE(alone >= 2U);
-        CHECK(server.counters().packets_held == ((alone < ring) ? alone : ring));
-        CHECK(server.counters().packets_dropped == ((alone < ring) ? 0U : alone - ring));
+        // A refused ring drops its packet (the peer sends it again) and the next one takes the ring.
+        const usize room = mode.refused ? alone - 1U : alone;
+        CHECK(server.counters().packets_held == ((room < ring) ? room : ring));
+        CHECK(server.counters().packets_dropped == alone - ((room < ring) ? room : ring));
+        CHECK(server.table_bytes() > server_tables);
         CHECK(server.streams().open_streams() == 0U);
         REQUIRE(deliver_flight(server, flight, count, false) >= 1U);
         REQUIRE(server.handshake().early_data() == TlsEarlyData::Accepted);
         CHECK(server.streams().open_streams() == 1U); // the held packets were read under the keys that came
-        if (ring == 8U)
+        CHECK(server.table_bytes() == server_tables); // and the empty ring went back
+        if (ring == 8U && !mode.refused)
         {
             const QuicStreamRead peeked = server.streams().peek(0U);
             CHECK(peeked.data.size() == 6000U); // every byte of the flight, none sent again
@@ -4661,6 +4677,7 @@ TEST_CASE("QUIC connection: packets ahead of their keys are held in a bounded ri
         CHECK(client.counters().packets_held != 0U);
         if (ring == 8U)
         {
+            CHECK(client.table_bytes() == client_tables); // every held packet was read: the ring went back
             // No time passed and nothing was sent again: the held packets completed the handshake.
             CHECK(client.state() == QuicConnectionState::Established);
             CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
@@ -6032,7 +6049,7 @@ TEST_CASE("QUIC connection: a multipath limit allocates the path slots up front,
         REQUIRE(whole.ready());
     }
     const usize total = allocator.calls() - start;
-    CHECK(total == without + 2U); // the slots and their sent-packet storage
+    CHECK(total == without + kQuicMaxPaths); // the slots, and each further slot's first sent-packet storage
     for (usize allowed = 0U; allowed < total; ++allowed)
     {
         INFO("allocations allowed " << allowed);
@@ -9762,6 +9779,318 @@ TEST_CASE("QUIC connection: CRYPTO buffers take storage as the handshake needs i
         CHECK(server.close_info().local);
         CHECK(server.close_info().error_code == code(QuicTransportError::InternalError));
         CHECK(server.buffer_bytes() == 0U);
+    }
+}
+
+namespace
+{
+constexpr u64 kBulkBytes = u64{1} << 21U;
+constexpr u32 kManyStreams = 96U; // more STREAM frames than the ledger's first records
+
+// Stream windows wide enough for a flight past the first sent-packet storage and ledger.
+QuicStreamLimits bulk_limits()
+{
+    QuicStreamLimits limits = stream_limits();
+    limits.receive_bytes = 1U << 20U;
+    limits.send_bytes = 1U << 20U;
+    limits.stream_window = 1U << 20U;
+    limits.connection_window = 1U << 20U;
+    limits.connection_max_window = 1U << 21U;
+    return limits;
+}
+
+// One client stream of kBulkBytes.
+QuicConnectionConfig bulk_config(QuicSide side, const Identity& identity, usize seed)
+{
+    QuicConnectionConfig config = config_for(side, identity, QuicVersion::V1, seed);
+    config.streams = bulk_limits();
+    return config;
+}
+
+// The ledger's bytes: the tables less the sent-packet storages (no packet is held).
+usize ledger_bytes(const QuicConnection& end)
+{
+    usize stored = 0U;
+    for (const QuicSpace space : {QuicSpace::Initial, QuicSpace::Handshake, QuicSpace::Application})
+    {
+        stored += end.recovery().storage_size(space) * sizeof(QuicSentEntry);
+    }
+    return end.table_bytes() - stored;
+}
+} // namespace
+
+TEST_CASE("QUIC connection: sent-packet storage and the frame ledger grow with the flight and shrink once it ends",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    for (const u32 loss : {0U, 20U})
+    {
+        INFO("loss " << loss);
+        CountingAllocator allocator;
+        {
+            QuicConnection client(allocator, bulk_config(QuicSide::Client, identity, 0U));
+            QuicConnection server(allocator, bulk_config(QuicSide::Server, identity, 1U));
+            REQUIRE(server.ready());
+            const usize allocations = allocator.calls();
+            const usize first = client.recovery().storage_size(QuicSpace::Application);
+            const usize built = client.table_bytes();
+            const usize ledger = ledger_bytes(client);
+            CHECK(client.recovery().storage_size(QuicSpace::Initial) == first);
+            CHECK(client.recovery().storage_size(QuicSpace::Handshake) == first);
+            CHECK(first < 128U + 8U); // below sent_packets and the reserve
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            net->rng.state = 5U;
+            for (Path& path : net->path)
+            {
+                path.loss = loss;
+                path.delay_ns = 20U * kMs;
+            }
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            net->advance(net->now + 500U * kMs);
+            for (QuicConnection* end : {&client, &server})
+            {
+                // Initial's and Handshake's storage went back at discard; the handshake grew nothing.
+                CHECK(end->recovery().storage_size(QuicSpace::Initial) == 0U);
+                CHECK(end->recovery().storage_size(QuicSpace::Handshake) == 0U);
+                CHECK(end->recovery().storage_size(QuicSpace::Application) == first);
+                CHECK(end->table_bytes() == built - (2U * first * sizeof(QuicSentEntry)));
+            }
+            u64 stream = 0U;
+            REQUIRE(client.streams().open(true, stream) == QuicStreamError::None);
+            u64 written = 0U;
+            u64 read = 0U;
+            usize grown = 0U;
+            usize grown_ledger = 0U;
+            REQUIRE(net->run_until(
+                [&]
+                {
+                    static_cast<void>(write_pattern(client.streams(), stream, written, kBulkBytes, stream));
+                    const usize size = client.recovery().storage_size(QuicSpace::Application);
+                    grown = (size > grown) ? size : grown;
+                    grown_ledger = (ledger_bytes(client) > grown_ledger) ? ledger_bytes(client) : grown_ledger;
+                    return server.streams().recv_state(stream) != QuicRecvState::None &&
+                           drain(server.streams(), stream, read, stream);
+                },
+                600000U * kMs));
+            // Every record named by a token survived the ledger's growth: the stream completed, each byte once.
+            CHECK(read == kBulkBytes);
+            CHECK(client.streams().connection_sent() == kBulkBytes);
+            CHECK(grown > first);
+            CHECK(grown <= 128U + 8U);
+            CHECK((loss != 0U || grown_ledger > ledger)); // one record a packet: a lossless flight outgrows the ledger
+            // Three PTOs after the flight, the client holds nothing: both tables are back at their first sizes, and
+            // no timer is left for them.
+            net->advance(net->now + 2000U * kMs);
+            CHECK(net->in_flight() == 0U);
+            CHECK(client.recovery().storage_size(QuicSpace::Application) == first);
+            CHECK(client.table_bytes() == built - (2U * first * sizeof(QuicSentEntry)));
+            CHECK(server.table_bytes() <= built);
+            CHECK(client.next_timer_ns() >= net->now + 1000U * kMs);
+            CHECK(server.next_timer_ns() >= net->now + 1000U * kMs);
+            CHECK(client.state() == QuicConnectionState::Established);
+            CHECK(allocator.calls() == allocations + client.buffer_allocations() + server.buffer_allocations());
+        }
+        CHECK(allocator.live() == 0U);
+    }
+    {
+        // Many streams of 256-byte windows over a path that loses 2%: each packet carries several records, the
+        // ledger moves while packets are lost, and each lost frame goes again through its packet's token.
+        CountingAllocator allocator;
+        QuicConnectionConfig client_config = bulk_config(QuicSide::Client, identity, 2U);
+        QuicConnectionConfig server_config = bulk_config(QuicSide::Server, identity, 3U);
+        for (QuicConnectionConfig* config : {&client_config, &server_config})
+        {
+            config->streams.peer_bidi = kManyStreams;
+            config->streams.local_bidi = kManyStreams;
+            config->streams.receive_bytes = 256U;
+            config->streams.stream_window = 256U;
+        }
+        QuicConnection client(allocator, client_config);
+        QuicConnection server(allocator, server_config);
+        connect(client);
+        auto net = std::make_unique<Net>(client, server);
+        net->rng.state = 9U;
+        for (Path& path : net->path)
+        {
+            path.loss = 20U;
+            path.delay_ns = 20U * kMs;
+        }
+        REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+        net->advance(net->now + 500U * kMs);
+        const usize ledger = ledger_bytes(client);
+        const usize dropped = net->dropped[0];
+        constexpr u64 each = 4096U;
+        u64 ids[kManyStreams] = {};
+        u64 written[kManyStreams] = {};
+        u64 read[kManyStreams] = {};
+        for (u64& id : ids)
+        {
+            REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+        }
+        usize grown_ledger = 0U;
+        const auto step = [&]
+        {
+            usize done = 0U;
+            for (usize index = 0U; index < kManyStreams; ++index)
+            {
+                static_cast<void>(write_pattern(client.streams(), ids[index], written[index], each, ids[index]));
+                const bool ended = server.streams().recv_state(ids[index]) != QuicRecvState::None &&
+                                   drain(server.streams(), ids[index], read[index], ids[index]);
+                done += ended ? 1U : 0U;
+            }
+            grown_ledger = (ledger_bytes(client) > grown_ledger) ? ledger_bytes(client) : grown_ledger;
+            return done == kManyStreams;
+        };
+        REQUIRE(net->run_until(step, 600000U * kMs));
+        CHECK(grown_ledger > ledger);
+        CHECK(net->dropped[0] > dropped);
+        for (const u64 bytes : read)
+        {
+            CHECK(bytes == each);
+        }
+        CHECK(client.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC connection: a further path slot's sent-packet storage grows with its flight and returns to its first "
+          "size when the slot closes",
+          "[net][net-path][quic-connection][multipath]")
+{
+    MultipathPair pair(2U, 2U, false, true, 1024U, false, 0U, true, bulk_limits());
+    pair.open_second();
+    QuicConnection& client = pair.client;
+    const usize first = client.recovery().storage_size(QuicSpace::Application, 1U);
+    REQUIRE(first != 0U);
+    CHECK(first == client.recovery().storage_size(QuicSpace::Application, 0U));
+    // A stream pinned to path ID 1: its flight there outgrows the slot's first storage.
+    u64 stream = 0U;
+    REQUIRE(client.streams().open(true, stream) == QuicStreamError::None);
+    REQUIRE(client.streams().pin(stream, 1U) == QuicStreamError::None);
+    u64 written = 0U;
+    u64 read = 0U;
+    usize grown = 0U;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(write_pattern(client.streams(), stream, written, kBulkBytes, stream));
+            const usize size = client.recovery().storage_size(QuicSpace::Application, 1U);
+            grown = (size > grown) ? size : grown;
+            return pair.server.streams().recv_state(stream) != QuicRecvState::None &&
+                   drain(pair.server.streams(), stream, read, stream);
+        },
+        600000U * kMs));
+    CHECK(read == kBulkBytes);
+    CHECK(grown > first);
+    // Path ID 1 abandoned and closed at both ends: the slot holds none, and path ID 2 opens it at the first size.
+    REQUIRE(client.abandon_path(1U, code(QuicTransportError::ApplicationAbandonPath), pair.net->now) ==
+            QuicAbandon::Abandoned);
+    REQUIRE(pair.net->run_until(
+        [&] { return client.counters().paths_closed == 1U && pair.server.counters().paths_closed == 1U; },
+        600000U * kMs));
+    CHECK(client.recovery().storage_size(QuicSpace::Application, 1U) == 0U);
+    REQUIRE(pair.net->run_until([&] { return client.peer_cid_count(2U) != 0U; }));
+    u64 path_id = 0U;
+    REQUIRE(client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+    CHECK(path_id == 2U);
+    CHECK(client.recovery().storage_size(QuicSpace::Application, 1U) == first);
+    REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+    CHECK(client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a refused sent-packet storage stays smaller and a refused ledger closes with "
+          "INTERNAL_ERROR",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    for (const bool refused : {false, true})
+    {
+        INFO("refused " << refused);
+        {
+            // PINGs no one acknowledges: only the storage grows.
+            CountingAllocator allocator;
+            QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1, 0U));
+            QuicConnection server(allocator, config_for(QuicSide::Server, identity, QuicVersion::V1, 1U));
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            net->advance(net->now + 500U * kMs);
+            const usize first = client.recovery().storage_size(QuicSpace::Application);
+            if (refused)
+            {
+                allocator.refuse_after(allocator.calls());
+            }
+            u8 datagram[kQuicDefaultMaxDatagram] = {};
+            u64 now = net->now;
+            usize sent = 0U;
+            for (usize round = 0U; round < 3U * first; ++round, now += kMs)
+            {
+                client.ping();
+                sent += (client.send(Span<u8>(datagram, sizeof(datagram)), now) != 0U) ? 1U : 0U;
+            }
+            // A storage refused its growth only holds packets back sooner.
+            CHECK(sent >= first / 2U);
+            CHECK(client.state() == QuicConnectionState::Established);
+            const usize size = client.recovery().storage_size(QuicSpace::Application);
+            if (refused)
+            {
+                CHECK(size == first);
+            }
+            else
+            {
+                CHECK(sent > first);
+                CHECK(size > first);
+            }
+            CHECK(client.recovery().stored(QuicSpace::Application) <= size);
+        }
+        {
+            // STREAM frames of many streams no one acknowledges: each is a record, and one packet carries many.
+            CountingAllocator allocator;
+            QuicConnectionConfig client_config = stream_config(QuicSide::Client, identity, QuicVersion::V1, 0U);
+            QuicConnectionConfig server_config = stream_config(QuicSide::Server, identity, QuicVersion::V1, 1U);
+            for (QuicConnectionConfig* config : {&client_config, &server_config})
+            {
+                config->streams.peer_bidi = kManyStreams;
+                config->streams.local_bidi = kManyStreams;
+            }
+            QuicConnection client(allocator, client_config);
+            QuicConnection server(allocator, server_config);
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            net->advance(net->now + 500U * kMs);
+            const usize ledger = ledger_bytes(client);
+            for (usize index = 0U; index < kManyStreams; ++index)
+            {
+                u64 stream = 0U;
+                REQUIRE(client.streams().open(true, stream) == QuicStreamError::None);
+                u64 written = 0U;
+                REQUIRE(write_pattern(client.streams(), stream, written, 16U, stream, false));
+            }
+            if (refused)
+            {
+                allocator.refuse_after(allocator.calls()); // the stream buffers are taken: only the ledger grows
+            }
+            u8 datagram[kQuicDefaultMaxDatagram] = {};
+            u64 now = net->now;
+            for (usize round = 0U; round < 8U && client.state() == QuicConnectionState::Established;
+                 ++round, now += kMs)
+            {
+                static_cast<void>(client.send(Span<u8>(datagram, sizeof(datagram)), now));
+            }
+            if (refused)
+            {
+                CHECK(client.state() == QuicConnectionState::Closing);
+                CHECK(client.close_info().local);
+                CHECK(client.close_info().error_code == code(QuicTransportError::InternalError));
+                CHECK(client.send(Span<u8>(datagram, sizeof(datagram)), now) != 0U); // its close
+            }
+            else
+            {
+                CHECK(client.state() == QuicConnectionState::Established);
+                CHECK(ledger_bytes(client) > ledger);
+            }
+        }
     }
 }
 

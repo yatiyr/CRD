@@ -1421,6 +1421,43 @@ u64 QuicRecovery::largest_acked(QuicSpace space, usize path) const noexcept
     return space_of(space, path).largest_acked;
 }
 
+usize QuicRecovery::stored(QuicSpace space, usize path) const noexcept
+{
+    return usable(space, path) ? space_of(space, path).count : 0U;
+}
+
+usize QuicRecovery::storage_size(QuicSpace space, usize path) const noexcept
+{
+    return usable(space, path) ? space_of(space, path).entries.size() : 0U;
+}
+
+bool QuicRecovery::discarded(QuicSpace space) const noexcept
+{
+    return space != QuicSpace::Application && m_spaces[quic_space_index(space)].discarded;
+}
+
+bool QuicRecovery::swap_storage(QuicSpace id, cont::Span<QuicSentEntry>& storage, usize path) noexcept
+{
+    if (!usable(id, path))
+    {
+        return false;
+    }
+    Space& space = space_of(id, path);
+    if (storage.size() < space.count || (storage.empty() && !space.discarded))
+    {
+        return false;
+    }
+    for (usize i = 0U; i < space.count; ++i)
+    {
+        storage[i] = entry(space, i);
+    }
+    const cont::Span<QuicSentEntry> held = space.entries;
+    space.entries = storage;
+    space.head = 0U;
+    storage = held;
+    return true;
+}
+
 const QuicSentPacket* QuicRecovery::unacknowledged(QuicSpace space, u32 tag, usize path) const noexcept
 {
     const Space& held = space_of(space, path);

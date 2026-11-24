@@ -8,7 +8,9 @@
 // reaching numbers never sent), received packets, ACK frames written and carried, time, timeouts, key discards and
 // the handshake's milestones. An Application operation names a path slot (RFC 10069 section 5) in bits 5 and 6 of its
 // operation byte, and bit 7 has an ACK frame arrive through the next slot; an Application state operation with bit 6
-// of its parameter opens its slot, or closes it, or with bit 7 too stops it (its path ID abandoned).
+// of its parameter opens its slot, or closes it, or with bit 7 too stops it (its path ID abandoned). A state operation
+// with bit 7 of its parameter (alone for the Application space) then moves its space's entries to the space's other
+// storage of the same size, a discarded space's to none.
 //
 // Oracles, against a model of every packet sent and received. Each packet is settled at most once, by one event; an
 // acknowledged packet lay in the frame's ranges and was outstanding; a lost one lay at or below the largest
@@ -177,6 +179,8 @@ struct Log final : QuicRecoveryEvents
     }
 };
 
+// A move changes no answer: it succeeds exactly for a space the recovery holds, hands back the storage it held and
+// leaves the storage's size, and every oracle above holds across it.
 // (MSVC C4324: the path controls are 16-byte aligned.)
 #if CRD_COMPILER_MSVC
 #pragma warning(push)
@@ -187,6 +191,11 @@ struct World
     QuicSentEntry initial[8];
     QuicSentEntry handshake[8];
     QuicSentEntry application[kQuicMaxPaths][32];
+    // Each space's other storage of the same size, which a move takes in turn (moved: the space holds it now).
+    QuicSentEntry other_initial[8];
+    QuicSentEntry other_handshake[8];
+    QuicSentEntry other_application[kQuicMaxPaths][32];
+    bool          moved[kModelSpaces] = {};
     QuicPathRecovery states[kQuicMaxPaths]; // each slot's, slot 0's once it reopens
     QuicPathControl controls[kQuicMaxPaths]; // each open slot's, started when it opens
     QuicRecovery  recovery;
@@ -912,6 +921,7 @@ void op_toggle(World& w, usize path, u8 p)
     if (!w.open[path])
     {
         CRD_FUZZ_REQUIRE(w.recovery.open_path(path, w.states[path], Span<QuicSentEntry>(w.application[path], 32U)));
+        w.moved[2U + path] = false;
         CRD_FUZZ_REQUIRE(w.controls[path].start(QuicPathControlConfig{}, QuicPath{}, path + 1U));
         w.spaces[2U + path] = ModelSpace{};
         w.open[path] = true;
@@ -941,6 +951,47 @@ void op_toggle(World& w, usize path, u8 p)
         w.restart_due[other] = w.restart_due[other] || w.last_via[other] == path;
     }
     w.log_ended = w.log_ended || path == 0U;
+}
+
+void op_move(World& w, QuicSpace id, usize path)
+{
+    const bool app = id == QuicSpace::Application;
+    const usize index = app ? 2U + path : static_cast<usize>(id);
+    const usize size = app ? 32U : 8U;
+    QuicSentEntry* own = w.application[path];
+    QuicSentEntry* other = w.other_application[path];
+    if (id == QuicSpace::Initial)
+    {
+        own = w.initial;
+        other = w.other_initial;
+    }
+    else if (id == QuicSpace::Handshake)
+    {
+        own = w.handshake;
+        other = w.other_handshake;
+    }
+    const bool gone = !app && w.spaces[index].discarded;
+    Span<QuicSentEntry> storage;
+    if (!gone)
+    {
+        storage = Span<QuicSentEntry>(w.moved[index] ? own : other, size);
+    }
+    const bool held = w.usable(id, path);
+    const usize stored = w.recovery.stored(id, path);
+    const bool before = w.recovery.storage_size(id, path) != 0U;
+    CRD_FUZZ_REQUIRE(w.recovery.swap_storage(id, storage, path) == held);
+    if (!held)
+    {
+        CRD_FUZZ_REQUIRE(w.recovery.storage_size(id, path) == 0U && w.recovery.stored(id, path) == 0U);
+        return;
+    }
+    CRD_FUZZ_REQUIRE(w.recovery.stored(id, path) == stored);
+    CRD_FUZZ_REQUIRE(w.recovery.storage_size(id, path) == (gone ? 0U : size));
+    if (before)
+    {
+        CRD_FUZZ_REQUIRE(storage.size() == size && storage.data() == (w.moved[index] ? other : own));
+    }
+    w.moved[index] = !gone && !w.moved[index];
 }
 
 void op_state(World& w, QuicSpace id, usize path, u8 p)
@@ -978,6 +1029,10 @@ void op_state(World& w, QuicSpace id, usize path, u8 p)
     if (id == QuicSpace::Application && (p & 0x40U) != 0U)
     {
         op_toggle(w, path, p);
+    }
+    else if ((p & 0x80U) != 0U)
+    {
+        op_move(w, id, path);
     }
 }
 } // namespace

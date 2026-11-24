@@ -625,8 +625,20 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   nothing, and at once when the level's keys are discarded (RFC 9001 section 4.9), which happens exactly when its
   packets stop opening. Refused storage closes with INTERNAL_ERROR: on receipt, for data within
   the limit, and on sending, for a level owing nothing (no acknowledgement would ever make room). An established
-  connection holds no CRYPTO storage. `buffer_allocations()` and `buffer_bytes()` count the stream and CRYPTO buffers,
-  the only allocations after construction.
+  connection holds no CRYPTO storage. The growing tables (2026-11-24) follow the flight too. Each packet number
+  space's sent-packet storage starts at 22 entries (the reserve, two probes and the next packet, twice) and, after
+  each packet recorded, keeps that much room past what it holds, doubling up to `sent_packets` plus the reserve, so
+  `QuicRecovery` answers exactly as the full storage would (`swap_storage` moves the entries, oldest first). A refused
+  growth keeps the smaller storage, which only holds packets back sooner. Every slot's first storage is taken at
+  construction, so no packet of the peer's makes a connection allocate; Initial's and Handshake's go back at discard
+  and a closed slot's returns to the first size. The frame ledger starts at 64 records and doubles up to
+  `sent_frames` when a record finds it full; a packet's token is its first record's number (modulo 2^31), so it still
+  names the records after a move, and a refused growth closes with INTERNAL_ERROR (the frame is in the packet
+  already). Once nothing ack-eliciting is in flight, three PTOs after the last one sent, a grown table shrinks
+  to its first size when that holds what it keeps, else to twice that, and `next_timer_ns()` names that time. The held-packet ring is taken
+  only when a packet waits for its keys and goes back once it holds none; a refusal drops that packet. Counting:
+  `buffer_allocations()` (every allocation after construction), `buffer_bytes()` (stream and CRYPTO buffers) and
+  `table_bytes()`.
 
 Evidence: `test_quic_connection.cpp` (22 cases: both versions to confirmation, nothing allocated after construction;
 40 seeded paths that lose 20%, duplicate 10% and reorder; a server held to three times what it received and silent

@@ -534,6 +534,20 @@ public:
     // a packet acknowledged, never sent or no longer held.
     [[nodiscard]] u64 unacknowledged_sent_ns(QuicSpace space, u64 number, usize path = 0U) const noexcept;
 
+    // ---- Storage ----
+
+    // The entries `space` of slot `path` holds (settled ones too until they reach the head), and its storage's size;
+    // both 0 for a pair that is not one (an Application space of a slot not open).
+    [[nodiscard]] usize stored(QuicSpace space, usize path = 0U) const noexcept;
+    [[nodiscard]] usize storage_size(QuicSpace space, usize path = 0U) const noexcept;
+    // Whether `space` is discarded (Initial and Handshake: discard()).
+    [[nodiscard]] bool discarded(QuicSpace space) const noexcept;
+    // Moves the entries of `space` of slot `path` into `storage`, oldest first, and holds it from then on; `storage`
+    // then names the one held before, the caller's again. Nothing else changes, so a storage that keeps at least the
+    // room the full one would have keeps every answer the same. False, changing nothing, for a pair that is not one,
+    // a storage smaller than stored(), or an empty one for a space not discarded.
+    [[nodiscard]] bool swap_storage(QuicSpace space, cont::Span<QuicSentEntry>& storage, usize path = 0U) noexcept;
+
 private:
     using Space = QuicPathRecovery::Space;
     using Path = QuicPathRecovery::State;

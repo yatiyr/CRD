@@ -121,10 +121,11 @@
 //              transport parameters travel in CRYPTO frames of 1-RTT packets (a two-byte length, then the same
 //              encoding, grease and version_information as over TLS), and a server stays under the 3x limit until its
 //              client acknowledges one of its packets. Everything after is this connection's ordinary 1-RTT life.
-//   memory     every table comes from the injected allocator at construction. The streams' and the CRYPTO levels'
-//              buffers take storage from it as their data needs and give it back as S38 says (buffer_allocations());
-//              a level's goes back once it holds nothing, and at once when its keys are discarded (RFC 9001 section
-//              4.9). Nothing else allocates after construction.
+//   memory     every table comes from the injected allocator. The streams' and the CRYPTO levels' buffers take
+//              storage from it as their data needs and give it back as S38 says (buffer_allocations()); a level's
+//              goes back once it holds nothing, and at once when its keys are discarded (RFC 9001 section 4.9). The
+//              sent-packet storages and the frame ledger grow with the flight and shrink once it is over; the
+//              held-packet ring is taken only while a packet waits for its keys (table_bytes()).
 //   threads    a connection belongs to its loop's thread.
 
 #include <crd/containers/span.hpp>
@@ -465,7 +466,7 @@ public:
     // False when the configuration is out of range (no TLS context, stream credit or a datagram size in the
     // parameters, stream or datagram limits out of range, a version list without `version`, sizes out of bounds, a seed
     // of another length) or the allocator or the provider refused.
-    [[nodiscard]] bool ready() const noexcept { return m_storage != nullptr; }
+    [[nodiscard]] bool ready() const noexcept { return m_recovery != nullptr; }
 
     // A client's start: it issues `local_cid` (0 to 20 bytes) and sends its first Initial to `initial_dcid` (8 to 20
     // bytes, from entropy, RFC 9000 section 7.2). A server's: the client Initial `accept` describes, which the
@@ -586,11 +587,14 @@ public:
     // The connection's streams: opened, written, read and polled by the application, their frames sent by send().
     [[nodiscard]] QuicStreamSet& streams() noexcept { return m_streams; }
     [[nodiscard]] const QuicStreamSet& streams() const noexcept { return m_streams; }
-    // The buffers the connection has taken from its allocator after construction: its streams' (QuicStreamSet::
-    // buffer_allocations) and its CRYPTO levels'. Nothing else it does after construction allocates.
+    // What the connection has taken from its allocator after construction: its streams' buffers (QuicStreamSet::
+    // buffer_allocations), its CRYPTO levels' and its growing tables' (table_bytes). Nothing else allocates then.
     [[nodiscard]] u32 buffer_allocations() const noexcept;
-    // The bytes those buffers hold now, their bitmaps included.
+    // The bytes the stream and CRYPTO buffers hold now, their bitmaps included.
     [[nodiscard]] usize buffer_bytes() const noexcept;
+    // The bytes the growing tables hold now: each packet number space's sent-packet storage, the frame ledger and the
+    // held-packet ring.
+    [[nodiscard]] usize table_bytes() const noexcept;
     // The connection's datagrams: queued, read and polled by the application, their frames sent by send().
     [[nodiscard]] QuicDatagrams& datagrams() noexcept { return m_datagrams; }
     [[nodiscard]] const QuicDatagrams& datagrams() const noexcept { return m_datagrams; }
@@ -737,9 +741,10 @@ private:
         QuicBufferStore out_store;
     };
 
-    // A frame a sent packet carried that is settled when the packet is acknowledged, lost or discarded. A packet's
-    // records are consecutive in the ring, the first named by its QuicSentPacket::token; a packet is its space, its
-    // path slot (each path's numbers start at 0) and its number.
+    // A frame a sent packet carried that is settled when the packet is acknowledged, lost or discarded. Records are
+    // numbered in sending order and held in a ring from the oldest's slot, so a packet's records are consecutive and
+    // its QuicSentPacket::token (the first one's number, modulo 2^31) still names them after the ledger moves; a
+    // packet is its space, its path slot (each path's numbers start at 0) and its number.
     struct SentFrame
     {
         u64 packet = 0U;
@@ -780,7 +785,8 @@ private:
         bool carried_other = false; // another slot's acknowledgement of more than PINGs (m_beyond_ping)
     };
 
-    // A packet held until its keys come; its bytes are a max_datagram_bytes slot of m_held_bytes.
+    // A packet held until its keys come; its bytes are a max_datagram_bytes slot of m_held_bytes. The ring is taken
+    // when a packet first needs it and given back once it holds none (read_held).
     struct Held
     {
         u32 bytes = 0U;
@@ -953,8 +959,10 @@ private:
     [[nodiscard]] bool settle_early(u64 now_ns) noexcept;
     void reject_early(u64 now_ns) noexcept;
     void hold(QuicPacketType type, cont::ConstSpan<u8> packet, Ecn ecn) noexcept;
-    // Reads the held packets whose keys came, until none more opens; drops those whose keys went.
+    // Reads the held packets whose keys came, until none more opens; drops those whose keys went. An empty ring goes
+    // back to the allocator.
     void read_held(u64 now_ns) noexcept;
+    void release_held() noexcept;
     [[nodiscard]] bool new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept;
     [[nodiscard]] bool retire_local(u64 path_id, u64 sequence, u64 now_ns) noexcept;
     // An ACK frame, or a PATH_ACK frame of path ID 0's, which acknowledges the same space (RFC 10069 section 2.3).
@@ -1092,6 +1100,32 @@ private:
     // RFC 10069 section 5.7: a probe timeout on `slot` while another path is live sends the frames of its packets in
     // flight again as if lost (on the live paths, held_dark()), the packets left to recovery and the controller.
     void release_frames(usize slot) noexcept;
+
+    // ---- Growing tables ----
+    // A packet number space's sent-packet storage starts at kFirstSentEntries and grows with the flight: after each
+    // packet recorded it keeps room for kSentHeadroom more (the reserve, two probes and the next packet), up to
+    // sent_packets plus the reserve, so the recovery answers as the full storage would. A refusal keeps the smaller
+    // storage, which only holds packets back sooner. Every slot's first storage is taken at construction, so no
+    // packet of the peer's makes the connection allocate; a discarded space's goes back at once and a closed slot's
+    // returns to the first size. The ledger grows likewise when a record finds it full under sent_frames; refused,
+    // the packet being written cannot keep its frames and the connection closes with INTERNAL_ERROR. Once nothing
+    // ack-eliciting is in flight, three PTOs after the last one sent, a grown storage or ledger shrinks to its first
+    // size when that holds what it keeps (its entries and room, its records), and to twice that when it does not.
+
+    // `space` of slot `slot` takes a storage of `size` entries (none for 0), the entries it holds moved over. False,
+    // changing nothing, on a refusal or a pair the recovery does not hold.
+    [[nodiscard]] bool resize_sent(QuicSpace space, usize slot, usize size) noexcept;
+    // After a packet of `space` was recorded on slot `slot`.
+    void grow_sent(QuicSpace space, usize slot) noexcept;
+    // A closed slot's storage returns to the first size.
+    void reset_sent(usize slot) noexcept;
+    [[nodiscard]] bool resize_ledger(u32 size) noexcept;
+    // The slot of the record `at` past the oldest (fewer than the ledger's size).
+    [[nodiscard]] u32 frame_slot(u64 at) const noexcept;
+    // When a grown table may shrink: kNeverNs while none grew since the last trim, or while ack-eliciting packets are
+    // in flight.
+    [[nodiscard]] u64 trim_ns() const noexcept;
+    void trim_tables(u64 now_ns) noexcept;
     // Whether another slot sends, carries data on its active 4-tuple and has fewer than `timeouts` probe timeouts
     // pending (1: none, a live path).
     [[nodiscard]] bool fresher_path(usize slot, u32 timeouts) const noexcept;
@@ -1135,8 +1169,20 @@ private:
 
     memory::IAllocator& m_allocator;
     QuicConnectionConfig m_config; // its spans are copied below and cleared
-    QuicSentEntry* m_storage = nullptr;
+    // Each packet number space's sent-packet storage (number_space()), lent to the recovery while the space is one.
+    struct SentStore
+    {
+        QuicSentEntry* entries = nullptr;
+        usize size = 0U;
+    };
+    SentStore m_sent[kNumberSpaces];
     SentFrame* m_frames = nullptr;
+    u32 m_frame_size = 0U;     // the ledger's records
+    u64 m_frame_head = 0U;     // the oldest record's number
+    u32 m_frame_at = 0U;       // and its slot
+    u32 m_frame_count = 0U;
+    bool m_tables_grown = false;   // a storage or the ledger grew since the last trim
+    bool m_ledger_refused = false; // a record was refused the ledger's growth: write_packet closes
     QuicRecovery* m_recovery = nullptr;
     // Each open path slot's sending state: slot 0's is m_first_control (path ID 0's, then a reclaimed slot's), the
     // others' are allocated with their slot.
@@ -1155,8 +1201,6 @@ private:
     QuicDatagrams m_datagrams;
     Events m_events;
     HelloAnswer m_hello;
-    u32 m_frame_head = 0U;
-    u32 m_frame_count = 0U;
     u32 m_crypto_allocations = 0U; // the CRYPTO levels' blocks taken
     Level m_levels[kQuicSpaces];
     crypto::QuicHandshake m_handshake;
@@ -1172,6 +1216,7 @@ private:
     u8* m_held_bytes = nullptr;
     Held* m_held = nullptr;
     u32 m_held_count = 0U;
+    u32 m_table_allocations = 0U; // the held ring's, sent-packet storages' and ledger's taken after construction
 
     QuicConnectionState m_state = QuicConnectionState::Idle;
     QuicTransportParameters m_local;
@@ -1242,7 +1287,7 @@ private:
     bool m_zero_closed = false; // path ID 0 closed (close_abandoned): slot 0 is no longer the handshake's
     Endpoint m_zero_server;     // server_address() once path ID 0 closed
     // Path slots 1 to kQuicMaxPaths - 1 (RFC 10069), allocated at construction when this side's limit is above 0, so
-    // opening a path allocates nothing: each one's recovery (its Application packets in m_slot_entries) and sending
+    // opening a path allocates nothing: each one's recovery (its first sent-packet storage in m_sent) and sending
     // state, its 4-tuples, and one ID space, which serves whichever path ID it holds (its own slot's or another's).
     struct PathSlot
     {
@@ -1253,8 +1298,7 @@ private:
     };
     static constexpr usize kFurtherSlots = kQuicMaxPaths - 1U;
     PathSlot* m_slots = nullptr;
-    QuicSentEntry* m_slot_entries = nullptr; // kFurtherSlots times sent_packets + kSentPacketReserve
-    usize m_tentative_slot = kQuicNoPath;    // begin_path()'s, until commit_path() or undo_path()
+    usize m_tentative_slot = kQuicNoPath; // begin_path()'s, until commit_path() or undo_path()
     QuicPath m_candidate;      // the path of a datagram being read from no known path
     usize m_receive_path = 0U; // the 4-tuple of the datagram being read, in m_receive_slot's (kQuicNoPath: m_candidate)
     // From a packet's admission to the choice of its path (follow_packet()) its path is not forgotten: the drop asked

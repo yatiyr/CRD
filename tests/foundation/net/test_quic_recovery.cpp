@@ -1877,3 +1877,80 @@ TEST_CASE("quic recovery: key updates and closing wait on the largest probe peri
     REQUIRE(f.recovery.close_path(1U, 350U * kMs, f.events));
     CHECK(f.recovery.largest_probe_period_ns() == f.recovery.probe_period_ns(app));
 }
+
+TEST_CASE("quic recovery: a space's entries move to another storage in order, every answer kept",
+          "[net][quic][recovery]")
+{
+    QuicSentEntry initial[2];
+    QuicSentEntry handshake[2];
+    QuicSentEntry application[8];
+    QuicRecovery recovery(QuicRecoveryConfig{QuicSide::Server}, Span<QuicSentEntry>(initial, 2U),
+                          Span<QuicSentEntry>(handshake, 2U), Span<QuicSentEntry>(application, 8U));
+    Events events;
+    const QuicSpace app = QuicSpace::Application;
+    for (u64 number = 0U; number < 8U; ++number)
+    {
+        REQUIRE(recovery.on_sent(app, packet(number, number * kMs), events) == QuicRecoveryError::None);
+    }
+    const AckFrame first = ack_of(0U, 3U);
+    REQUIRE(recovery.on_ack(app, first.ack(), 20U * kMs, events).error == QuicRecoveryError::None);
+    for (u64 number = 8U; number < 12U; ++number) // the ring wraps: 4 to 7, then 8 to 11 in the first slots
+    {
+        REQUIRE(recovery.on_sent(app, packet(number, 20U * kMs + number), events) == QuicRecoveryError::None);
+    }
+    CHECK(recovery.stored(app) == 8U);
+    CHECK(recovery.storage_size(app) == 8U);
+    CHECK_FALSE(recovery.can_send(app));
+    const u64 in_flight = recovery.bytes_in_flight();
+    // Smaller than what it holds, empty for a space not discarded, or a slot not open: nothing moves.
+    QuicSentEntry small[4];
+    Span<QuicSentEntry> storage(small, 4U);
+    CHECK_FALSE(recovery.swap_storage(app, storage));
+    storage = Span<QuicSentEntry>();
+    CHECK_FALSE(recovery.swap_storage(app, storage));
+    QuicSentEntry larger[16];
+    storage = Span<QuicSentEntry>(larger, 16U);
+    CHECK_FALSE(recovery.swap_storage(app, storage, 2U));
+    CHECK(recovery.storage_size(app, 2U) == 0U);
+    CHECK(recovery.stored(app) == 8U);
+    // Moved, oldest first: the old storage is the caller's again and every packet answers as it did.
+    REQUIRE(recovery.swap_storage(app, storage));
+    CHECK(storage.data() == application);
+    CHECK(storage.size() == 8U);
+    CHECK(recovery.storage_size(app) == 16U);
+    CHECK(recovery.stored(app) == 8U);
+    CHECK(recovery.can_send(app));
+    CHECK(recovery.bytes_in_flight() == in_flight);
+    CHECK(recovery.unacknowledged_sent_ns(app, 4U) == 4U * kMs);
+    CHECK(recovery.unacknowledged_sent_ns(app, 11U) == 20U * kMs + 11U);
+    CHECK(recovery.unacknowledged_sent_ns(app, 3U) == kNeverNs);
+    const usize before = events.count;
+    const AckFrame second = ack_of(4U, 11U);
+    REQUIRE(recovery.on_ack(app, second.ack(), 40U * kMs, events).error == QuicRecoveryError::None);
+    REQUIRE(events.count == before + 8U);
+    for (usize at = 0U; at < 8U; ++at)
+    {
+        CHECK(events.kinds[before + at] == 'a');
+        CHECK(events.numbers[before + at] == 4U + at);
+    }
+    CHECK(recovery.bytes_in_flight() == 0U);
+    // A space with an acknowledgement of a number it never sent still refuses it after the move.
+    const AckFrame unsent = ack_of(12U, 12U);
+    CHECK(recovery.on_ack(app, unsent.ack(), 41U * kMs, events).error == QuicRecoveryError::AckOfUnsent);
+    // A discarded space gives its storage up for none: it records nothing more.
+    REQUIRE(recovery.on_sent(QuicSpace::Handshake, packet(0U, 0U), events) == QuicRecoveryError::None);
+    CHECK(recovery.stored(QuicSpace::Handshake) == 1U);
+    CHECK_FALSE(recovery.discarded(QuicSpace::Handshake));
+    storage = Span<QuicSentEntry>();
+    CHECK_FALSE(recovery.swap_storage(QuicSpace::Handshake, storage));
+    REQUIRE(recovery.discard(QuicSpace::Handshake, 42U * kMs, events));
+    CHECK(recovery.discarded(QuicSpace::Handshake));
+    CHECK_FALSE(recovery.discarded(app));
+    CHECK(recovery.stored(QuicSpace::Handshake) == 0U);
+    REQUIRE(recovery.swap_storage(QuicSpace::Handshake, storage));
+    CHECK(storage.data() == handshake);
+    CHECK(recovery.storage_size(QuicSpace::Handshake) == 0U);
+    CHECK_FALSE(recovery.can_send(QuicSpace::Handshake));
+    CHECK_FALSE(recovery.can_send_data(QuicSpace::Handshake));
+    CHECK(recovery.on_sent(QuicSpace::Handshake, packet(1U, 43U * kMs), events) == QuicRecoveryError::Discarded);
+}
