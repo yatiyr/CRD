@@ -138,10 +138,12 @@ public:
             m_restarted = false;
         }
         // A packet at or past the proven bytes of its train probes the path (teach_train), one train at a time. A
-        // flight's first round from nothing in flight with nothing acknowledged at that instant (the first, or one
-        // after idle) bursts the initial window on any host, so its trains prove nothing longer; one that a host
-        // turn's acknowledgements emptied is a coarse host's train.
-        m_cold_round = m_cold_round || (in_flight <= packet.bytes && packet.sent_ns != m_acked_ns);
+        // flight's first round from nothing in flight with no acknowledgement in the send quantum before it (the
+        // first, or one after idle) bursts the initial window on any host, so its trains prove nothing longer; one
+        // that a host turn's acknowledgements emptied (read at the turn's start, its sends a little later) is a
+        // coarse host's train.
+        const bool acked_just_before = m_acked_ns != kNeverNs && packet.sent_ns < m_acked_ns + kSendQuantumNs;
+        m_cold_round = m_cold_round || (in_flight <= packet.bytes && !acked_just_before);
         m_train_longest = m_cold_round ? m_train_longest : max_u64(m_train_longest, packet.train + packet.bytes);
         if (packet.train >= m_train_proven)
         {
@@ -637,8 +639,8 @@ private:
     bool m_limited_before = false; // the round before
     bool m_restarted = false;      // the flight started from nothing in flight and nothing has held it back since
     bool m_restart_round = false;  // the flight started from nothing in flight and nothing of it is acknowledged yet
-    bool m_cold_round = false;     // so did it, at no acknowledgement's instant (on_sent)
-    u64 m_acked_ns = kNeverNs;     // the last acknowledgement's
+    bool m_cold_round = false;     // so did it, with no acknowledgement just before (on_sent)
+    u64 m_acked_ns = kNeverNs;     // the last acknowledgement's time
 
     // The train cap (teach_train).
     bool m_trains = false; // kept at all

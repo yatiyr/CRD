@@ -547,8 +547,13 @@ TEST_CASE("congestion: neither a cold flight's first round (the first, or one af
         const CongestionState held = c->state();
         const Controller swapped(policy_of(algorithm), kMss, &held);
         CHECK(swapped->burst(rtt) == 12000U);
-        // A train that reaches the proven length, as a coarse host's turn sends it at the instant its
-        // acknowledgements emptied the flight: the cap doubles at that round's end.
+        // A flight restarted after idle (2 ms after the last acknowledgement) proves nothing either.
+        s.now += 2U * kMs;
+        s.round(12000U, true);
+        CHECK(c->state().train_cap == 12000U);
+        // A train that reaches the proven length, as a coarse host's turn sends it 100 us after the acknowledgements
+        // that emptied the flight (the turn reads its clock again to send): the cap doubles at that round's end.
+        s.now += kMs / 10U;
         s.round(12000U, true);
         CHECK(c->state().train_cap == 24000U);
         CHECK(c->burst(rtt) == 24000U);
