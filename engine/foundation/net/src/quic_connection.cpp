@@ -2341,7 +2341,11 @@ bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
         {
             for (usize taken = 0U; taken <= slot; ++taken)
             {
-                control_at(taken)->unreserve();
+                QuicPathControl* const reserved = control_at(taken);
+                if (reserved != nullptr)
+                {
+                    reserved->unreserve();
+                }
             }
             return false;
         }
