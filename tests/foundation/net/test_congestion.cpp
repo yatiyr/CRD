@@ -436,7 +436,7 @@ TEST_CASE("congestion: the train cap grows from proven trains by one probe train
         CHECK(c->state().reductions == 1U);
         CHECK(c->state().train_cap == 13200U);
         CHECK(c->state().phase == CongestionPhase::Recovery);
-        CHECK(c->burst(rtt) == 12000U); // a recovery period bursts the initial window
+        CHECK(c->burst(rtt) == 13200U); // a recovery period bursts the proven length
         s.ack_all();
         s.round(13200U);
         s.round(13200U);
@@ -460,6 +460,29 @@ TEST_CASE("congestion: the train cap grows from proven trains by one probe train
         CHECK(seeded->burst(rtt) == 30000U);
         seeded->reset(0U);
         CHECK(seeded->state().train_cap == 12000U);
+
+        // A recovery period bursts the proven 24000 bytes: not the 48000 of a growth whose probe has not gone, and
+        // not the initial window. The period over, the cap again.
+        const Controller held(policy_of(algorithm), kMss, &grown);
+        Trains h{held};
+        h.round(12000U);
+        h.round(12000U);
+        h.train(24000U);
+        h.train(12000U);
+        h.ack_all();
+        h.round(12000U);
+        h.round(24000U);
+        h.round(24000U);
+        REQUIRE(held->state().train_cap == 48000U);
+        REQUIRE(held->burst(rtt) == 48000U);
+        h.lose(h.train(12000U) + 2U);
+        REQUIRE(held->state().phase == CongestionPhase::Recovery);
+        CHECK(held->burst(rtt) == 24000U);
+        h.ack_all();
+        CHECK(held->burst(rtt) == 24000U); // only packets sent before the reduction acknowledged
+        h.round(12000U);
+        CHECK(held->state().phase != CongestionPhase::Recovery);
+        CHECK(held->burst(rtt) == 48000U);
 
         // Before version 8 no train cap is kept: the burst is the initial window, and every loss reduces.
         CongestionPolicy seven = policy_of(algorithm);
@@ -1048,13 +1071,15 @@ TEST_CASE("congestion: under coarse host turns the train cap meets the initial w
             CHECK(eight.acked + eight.dropped * kMss >= seven.acked); // all but the probes' datagrams
         }
         // Deeper queues: 2.6, 2.5 and 5.4 times version 7's at 1 Gbit/s; at 100 Mbit/s, where 12000 bytes a turn
-        // were 96% of the link, the link.
+        // were 96% of the link, the link. On the deepest at 20 ms the recovery periods burst the proven length: the
+        // initial window's 12000 bytes a turn held each period to 38% of the link.
         const Path deep[] = {{gigabit, 250000U, 32768U, kMs, 0U},
                              {gigabit, 250000U, 65536U, 10U * kMs, 0U},
                              {gigabit, kMs, 65536U, kMs, 0U},
-                             {hundred_megabit, kMs, 65536U, kMs, 0U}};
-        const u64 times[] = {25U, 25U, 50U, 10U}; // tenths
-        for (usize index = 0U; index < 4U; ++index)
+                             {hundred_megabit, kMs, 65536U, kMs, 0U},
+                             {gigabit, 250000U, 262144U, 10U * kMs, 0U}};
+        const u64 times[] = {25U, 25U, 50U, 10U, 24U}; // tenths
+        for (usize index = 0U; index < 5U; ++index)
         {
             INFO("deep path " << index);
             const Run seven = run(algorithm, 7U, deep[index]);
@@ -1062,6 +1087,20 @@ TEST_CASE("congestion: under coarse host turns the train cap meets the initial w
             CHECK(eight.acked * 10U >= seven.acked * times[index]);
             CHECK(eight.acked >= seven.acked);
         }
+        // Version 7's 12000 bytes a 1 ms turn are 96 Mbit/s: just under a 100 Mbit/s link it never fills the queue
+        // and loses nothing, a rate cap rather than its controller. Under the cap (80 and 90 Mbit/s) both versions
+        // fill the queue and get the same; on the 100 Mbit/s link version 8 gets what both get with exact timers.
+        for (const u64 rate : {10000000U, 11250000U})
+        {
+            const Path under{rate, kMs, 32768U, 10U * kMs, 0U};
+            INFO("rate " << rate);
+            CHECK(run(algorithm, 8U, under).acked * 1000U >= run(algorithm, 7U, under).acked * 995U);
+        }
+        const Path capped{hundred_megabit, kMs, 32768U, 10U * kMs, 0U};
+        const Path exact{hundred_megabit, 0U, 32768U, 10U * kMs, 0U};
+        CHECK(run(algorithm, 8U, capped).acked * 100U >= run(algorithm, 7U, exact).acked * 99U);
+        CHECK(run(algorithm, 8U, exact).acked == run(algorithm, 7U, exact).acked);
+
         // Random loss (0.1%) teaches the cap nothing it keeps: no worse than version 7.
         const Path lossy{gigabit, 250000U, 32768U, kMs, 1U};
         CHECK(run(algorithm, 8U, lossy).acked >= run(algorithm, 7U, lossy).acked);

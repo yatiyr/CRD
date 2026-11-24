@@ -311,16 +311,18 @@ public:
     // trains the host segments whole instead of ten datagrams a train, a host that wakes once a millisecond fills its
     // link, and a slow or long path, an application-limited sender and a restart after idle (whose stale window
     // would put a whole quantum into a shallow queue at once) keep the initial window, as does a policy before
-    // version 8.
+    // version 8. A recovery period, as a probe out, bursts only the proven length: a growth not yet proven overflows
+    // a queue the reduction left full, and the initial window alone held a coarse host's sends for the period to a
+    // fraction of a deep queue's link.
     [[nodiscard]] u64 burst(const QuicRtt& rtt) const noexcept override
     {
-        if (m_policy.version < 8U || m_restarted || !(m_limited || m_limited_before) ||
-            m_phase == CongestionPhase::Recovery)
+        if (m_policy.version < 8U || m_restarted || !(m_limited || m_limited_before))
         {
             return m_initial;
         }
         const u64 quantum = multiply_divide(pacing_rate(rtt), kSendQuantumNs, kNanosPerSecond);
-        return max_u64(min_u64(quantum, m_probe_out ? m_train_proven : m_train_cap), m_initial);
+        const bool proven = m_probe_out || m_phase == CongestionPhase::Recovery;
+        return max_u64(min_u64(quantum, proven ? m_train_proven : m_train_cap), m_initial);
     }
 
     [[nodiscard]] CongestionState state() const noexcept override

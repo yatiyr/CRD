@@ -293,9 +293,10 @@ void check(const World& w)
     }
     if (!is_bbr(w) && !is_prague(w) && !is_scream(w) && !is_gcc(w))
     {
-        // A window controller's burst: the initial window, or while its flight is held back outside a recovery
-        // period a millisecond of its rate, the initial window at least and its train cap at most. The cap stays
-        // within that window and 64 KiB (or is that window, when larger); before version 8 none is kept.
+        // A window controller's burst: the initial window, or while its flight is held back a millisecond of its
+        // rate, the initial window at least and its train cap at most (the proven length, within it, while a probe is
+        // out or a recovery period lasts). The cap stays within that window and 64 KiB (or is that window, when
+        // larger); before version 8 none is kept.
         const u64 quantum = w.ctl->pacing_rate(rtt) / 1000U;
         const u64 initial = congestion_initial_window(w.policy, w.datagram);
         const u64 cap = (w.policy.version >= 8U) ? state.train_cap : initial;
@@ -304,8 +305,7 @@ void check(const World& w)
         const u64 capped = (quantum < cap) ? quantum : cap;
         const u64 most = (capped > initial) ? capped : initial;
         const u64 burst = w.ctl->burst(rtt);
-        CRD_FUZZ_REQUIRE(burst == initial || (state.limited && state.phase != CongestionPhase::Recovery &&
-                                              burst > initial && burst <= most));
+        CRD_FUZZ_REQUIRE(burst == initial || (state.limited && burst > initial && burst <= most));
         CRD_FUZZ_REQUIRE(state.limited || burst == initial);
         // Its rate: the window per smoothed RTT at the policy's gain, or from version 8 at one while a flight
         // restarted from nothing in flight waits for its first acknowledgement.
