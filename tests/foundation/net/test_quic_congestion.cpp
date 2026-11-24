@@ -1527,6 +1527,29 @@ public:
     usize size = 0U;
 };
 
+// Loses every datagram `client` sends to the server's first address once it is confirmed, and keeps the client IDs
+// `server` held when it first sent from its preferred socket.
+class FirstAddressDark final : public Filter
+{
+public:
+    void sent(usize from, ConstSpan<u8> /*datagram*/) override
+    {
+        if (from == 1U && answered == 0U && server->sent_path().socket == 1U)
+        {
+            answered = server->peer_cid_count();
+        }
+    }
+
+    bool drop(usize from, ConstSpan<u8> /*datagram*/) override
+    {
+        return from == 0U && client->confirmed() && client->sent_path().peer == kServerAt;
+    }
+
+    const QuicConnection* client = nullptr;
+    const QuicConnection* server = nullptr;
+    usize answered = 0U;
+};
+
 // Every path a server knows is on `socket`.
 [[nodiscard]] bool all_on(const QuicConnection& server, u32 socket)
 {
@@ -1597,6 +1620,29 @@ TEST_CASE("QUIC preferred address: once confirmed the client validates it and mo
     CHECK(pair.server.state() == QuicConnectionState::Established);
 }
 
+TEST_CASE("QUIC preferred address: the client's challenge there carries its connection IDs, so a server that reads "
+          "nothing else of the client's after confirmation has one unused to answer from its preferred socket",
+          "[net][net-path][quic-connection][preferred-address]")
+{
+    // A server answers from a new address only with an ID it has not used elsewhere (RFC 9000 section 9.5); the
+    // client issues its IDs once confirmed, in the same send as the challenge, and its active path's may arrive later.
+    Hosted pair(0U, false, true, Preferred::Follow);
+    Net& net = *pair.net;
+    FirstAddressDark dark;
+    dark.client = &pair.client;
+    dark.server = &pair.server;
+    net.filter = &dark;
+    REQUIRE(net.run_until([&] { return pair.client.confirmed(); }));
+    const usize issued = pair.server.peer_cid_count();
+    REQUIRE(net.run_until([&] { return pair.client.on_preferred_address() && pair.server.on_preferred_address(); }));
+    CHECK(issued == 1U);
+    CHECK(dark.answered > issued);
+    CHECK(pair.client.path() == QuicPath{0U, kPreferredAt});
+    CHECK(pair.server.path() == QuicPath{1U, net.client_at});
+    CHECK(pair.client.counters().path_failures == 0U);
+    CHECK(pair.server.counters().path_failures == 0U);
+}
+
 TEST_CASE("QUIC preferred address: a preferred socket that reaches nothing fails validation, and the client stays at "
           "the first address",
           "[net][net-path][quic-connection][preferred-address]")
@@ -1604,6 +1650,9 @@ TEST_CASE("QUIC preferred address: a preferred socket that reaches nothing fails
     Hosted pair(0U, false, true, Preferred::Follow);
     Net& net = *pair.net;
     net.server_down = 0b10U;
+    REQUIRE(net.run_until([&] { return pair.client.confirmed(); }));
+    const usize issued = pair.server.peer_cid_count();
+    CHECK(issued == 1U);
     pair.confirm();
     Bulk up{pair.client, pair.server, 1U << 18U};
     REQUIRE(net.run_until([&]
@@ -1616,6 +1665,7 @@ TEST_CASE("QUIC preferred address: a preferred socket that reaches nothing fails
     CHECK(pair.client.counters().path_failures >= 1U);
     CHECK(pair.client.counters().migrations == 0U);
     CHECK(pair.client.state() == QuicConnectionState::Established);
+    CHECK(pair.server.peer_cid_count() > issued); // the IDs its challenges carried came again on the first path
 }
 
 TEST_CASE("QUIC preferred address: a client that does not follow it moves only when told, migrate() waiting for the "

@@ -2749,16 +2749,15 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
                 m_cids_blocked = 0U;
             }
         }
-        // Path ID 0's IDs go in NEW_CONNECTION_ID and RETIRE_CONNECTION_ID frames without multipath, every one in
-        // their PATH_ forms with it (RFC 10069 section 3.2); a record names the frame's path ID and sequence.
-        const bool path_forms = m_multipath;
+        // Path ID 0's IDs are retired in RETIRE_CONNECTION_ID frames without multipath, every one in the PATH_ form
+        // with it (RFC 10069 section 3.2); a record names the frame's path ID and sequence. Then those owed go.
         u64 path_id = 0U;
         u64 sequence = 0U;
         while (m_frame_count < m_config.sent_frames && m_cids.next_retirement(path_id, sequence))
         {
             QuicFrame retire;
-            retire.kind = (path_id == 0U && !path_forms) ? QuicFrameKind::RetireConnectionId
-                                                         : QuicFrameKind::PathRetireConnectionId;
+            retire.kind = (path_id == 0U && !m_multipath) ? QuicFrameKind::RetireConnectionId
+                                                          : QuicFrameKind::PathRetireConnectionId;
             retire.path_id = path_id;
             retire.sequence = sequence;
             if (!put(retire))
@@ -2771,28 +2770,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             static_cast<void>(record(space, packet, kRecordRetire, retired, written));
             m_cids.retirement_sent(path_id, sequence);
         }
-        const QuicLocalCid* owed = nullptr;
-        while (m_frame_count < m_config.sent_frames && (owed = m_cids.next_owed(path_id)) != nullptr)
-        {
-            // Retire Prior To never passes the frame's own sequence (section 19.15): a rotated ID carries its own.
-            QuicFrame issued;
-            issued.kind =
-                (path_id == 0U && !path_forms) ? QuicFrameKind::NewConnectionId : QuicFrameKind::PathNewConnectionId;
-            issued.path_id = path_id;
-            issued.sequence = owed->sequence;
-            issued.retire_prior_to = min_u64(m_cids.local_retire_prior_to(path_id), owed->sequence);
-            issued.data = owed->id.view();
-            issued.reset_token = cont::ConstSpan<u8>(owed->reset_token, kQuicResetTokenBytes);
-            if (!put(issued))
-            {
-                break;
-            }
-            QuicStreamRecord sent;
-            sent.stream_id = path_id;
-            sent.value = owed->sequence;
-            static_cast<void>(record(space, packet, kRecordNewId, sent, written));
-            m_cids.local_sent(path_id, owed->sequence);
-        }
+        used += write_owed_ids(frames.subspan(used), packet, written);
     }
     QuicSendBuffer& out = m_levels[index].out;
     while (m_frame_count < m_config.sent_frames)
@@ -2944,6 +2922,38 @@ usize QuicConnection::write_path_frames(cont::Span<u8> frames, u64 packet, u64 n
     return used;
 }
 
+usize QuicConnection::write_owed_ids(cont::Span<u8> frames, u64 packet, Written& written) noexcept
+{
+    usize used = 0U;
+    u64 path_id = 0U;
+    const QuicLocalCid* owed = nullptr;
+    while (m_frame_count < m_config.sent_frames && (owed = m_cids.next_owed(path_id)) != nullptr)
+    {
+        // Retire Prior To never passes the frame's own sequence (section 19.15): a rotated ID carries its own.
+        QuicFrame issued;
+        issued.kind =
+            (path_id == 0U && !m_multipath) ? QuicFrameKind::NewConnectionId : QuicFrameKind::PathNewConnectionId;
+        issued.path_id = path_id;
+        issued.sequence = owed->sequence;
+        issued.retire_prior_to = min_u64(m_cids.local_retire_prior_to(path_id), owed->sequence);
+        issued.data = owed->id.view();
+        issued.reset_token = cont::ConstSpan<u8>(owed->reset_token, kQuicResetTokenBytes);
+        const usize bytes = write_quic_frame(issued, frames.subspan(used));
+        if (bytes == 0U)
+        {
+            break;
+        }
+        used += bytes;
+        written.eliciting = true;
+        QuicStreamRecord sent;
+        sent.stream_id = path_id;
+        sent.value = owed->sequence;
+        static_cast<void>(record(QuicSpace::Application, packet, kRecordNewId, sent, written)); // room checked
+        m_cids.local_sent(path_id, owed->sequence);
+    }
+    return used;
+}
+
 bool QuicConnection::observation_due(usize index) const noexcept
 {
     return m_peer_known && quic_provides_addresses(m_local.address_discovery) &&
@@ -3040,7 +3050,11 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     }
     else if (carry == Carry::Path)
     {
+        // The peer answers a challenge on a new path only with an ID of this side's it has not used elsewhere
+        // (section 9.5), and a peer that has none drops the challenge. The IDs owed go with the challenge, probing
+        // frames too, as those on the active path may be read after it; a lost one is owed again by its record.
         used = write_path_frames(writer.frames(), number, now_ns, written);
+        used += written.path_challenge ? write_owed_ids(writer.frames().subspan(used), number, written) : 0U;
     }
     else
     {

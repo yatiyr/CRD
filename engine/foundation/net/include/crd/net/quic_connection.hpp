@@ -1072,6 +1072,9 @@ private:
     // sent again when lost: a response answers one challenge, and a challenge's timer sends another. Then the path's
     // OBSERVED_ADDRESS when due, recorded so that a lost one is owed there again (`packet` names the record).
     [[nodiscard]] usize write_path_frames(cont::Span<u8> frames, u64 packet, u64 now_ns, Written& written) noexcept;
+    // The local connection IDs owed, while frames and the ledger have room: NEW_CONNECTION_ID frames, or their PATH_
+    // forms with multipath (RFC 10069 section 3.2), both probing (RFC 9000 section 9.1), each recorded in `packet`.
+    [[nodiscard]] usize write_owed_ids(cont::Span<u8> frames, u64 packet, Written& written) noexcept;
     // Whether path `index` is to carry an OBSERVED_ADDRESS now: this side offered reports, its peer asked for them,
     // the path owes one and is bound, and the ledger has room for its record.
     [[nodiscard]] bool observation_due(usize index) const noexcept;
