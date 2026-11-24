@@ -536,14 +536,15 @@ ordered byte stream QUIC carries: each stream's data and each encryption level's
 it in order; `take` consumes the handshake's copy, so the sent bytes stay here until acknowledged).
 
 - **Receiving** (RFC 9000 sections 2.2, 4.5 and 7.5). `QuicReceiveBuffer` stores data by offset in a window of its
-  capacity from the first unread byte, with one bit per byte for what arrived: memory is fixed and exact whatever the
-  peer overlaps, leaves out or repeats, and a frame of an acknowledged packet is never dropped. Refused, changing
+  capacity from the first unread byte, with one bit per byte for what arrived past the contiguous end: memory is fixed
+  and exact whatever the peer overlaps, leaves out or repeats, and a frame of an acknowledged packet is never dropped.
+  Data in order touches no bit (it moves the contiguous end; a watermark says when early bits may continue it). Refused, changing
   nothing: a final size contradicted (a FIN at another size, data past it, a FIN below the data received;
   FINAL_SIZE_ERROR), data past the window (FLOW_CONTROL_ERROR, or CRYPTO_BUFFER_EXCEEDED for CRYPTO data, whose
   window is the handshake's `receive_limit`), and other bytes at an offset already held (PROTOCOL_VIOLATION, the
   "MAY" of section 2.2 taken). A RESET_STREAM's final size is a zero-length FIN at that offset.
-- **Sending.** `QuicSendBuffer` keeps written data until acknowledged, with one bit per byte for acknowledged and for
-  lost data. The next chunk is the lowest lost run, else data never sent below the flow-control limit, never across
+- **Sending.** `QuicSendBuffer` keeps written data until acknowledged, with one bit per byte for lost data and for
+  data acknowledged past the acknowledged end (an acknowledgement in order touches none, as on receipt). The next chunk is the lowest lost run, else data never sent below the flow-control limit, never across
   the storage's end; the FIN rides on the chunk ending at the final size or goes alone (it takes no credit). A loss
   never marks bytes another copy had acknowledged; the room frees as the acknowledged prefix grows.
 - **Credit** (sections 4.1, 4.2 and 13.3). `QuicSendCredit` only rises and owes one DATA_BLOCKED or
