@@ -1114,6 +1114,9 @@ void transfer(Pair& pair)
         const usize want = (left < sizeof(chunk)) ? static_cast<usize>(left) : sizeof(chunk);
         usize taken = 0U;
         const bool fin_here = written + want == kTransferBytes;
+        const u64 read_before = read;
+        const QuicConnectionCounters client_before = pair.client.counters();
+        const QuicConnectionCounters server_before = pair.server.counters();
         if (client.write(id, ConstSpan<u8>(chunk, want), fin_here, taken) == QuicStreamError::None)
         {
             written += taken;
@@ -1135,12 +1138,18 @@ void transfer(Pair& pair)
         }
         // Time moves to the next timer (a delayed ACK frees the send buffer), kTransferWaitNs at most: a pair with
         // nothing outstanding has only its idle timeout left, which a writer with more to send never waits out (paths
-        // that acknowledge at once leave no timer between writes).
+        // that acknowledge at once leave no timer between writes). A round in which nothing was written or read and
+        // neither end sent or took a datagram leaves only time to change the pair, so it goes to the next timer: the
+        // bound is rounds, not time, for a pair the script taught an RTT of minutes, whose timers (a validation
+        // waiting for a peer connection ID, the idle timeout) lie hours apart.
+        const bool still = taken == 0U && read == read_before &&
+                           std::memcmp(&client_before, &pair.client.counters(), sizeof(client_before)) == 0 &&
+                           std::memcmp(&server_before, &pair.server.counters(), sizeof(server_before)) == 0;
         const u64 next = (pair.client.next_timer_ns() < pair.server.next_timer_ns()) ? pair.client.next_timer_ns()
                                                                                      : pair.server.next_timer_ns();
         const u64 wait = pair.now + kTransferWaitNs;
-        const u64 until = (next < wait) ? next : wait;
-        pair.now = (until > pair.now) ? until : pair.now;
+        const u64 until = (still || next < wait) ? next : wait;
+        pair.now = (until != kNeverNs && until > pair.now) ? until : pair.now;
         pair.timers();
     }
     CRD_FUZZ_REQUIRE((fin && read == kTransferBytes) || finished(pair.client) || finished(pair.server));
