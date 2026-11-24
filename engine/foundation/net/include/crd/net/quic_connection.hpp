@@ -965,6 +965,9 @@ private:
     void apply_peer_limits(const QuicTransportParameters& peer) noexcept;
     // The peer's max_udp_payload_size, capped: every path's search ceiling.
     [[nodiscard]] u32 peer_ceiling() const noexcept;
+    // A client's server parameters from the ticket's connection, which the handshake keeps while it lives: false
+    // when they do not parse.
+    [[nodiscard]] bool read_remembered(QuicTransportParameters& out) const noexcept;
     // A client: starts 0-RTT on the parameters its ticket remembers. Both: acts on the server's 0-RTT decision.
     [[nodiscard]] bool begin_early() noexcept;
     [[nodiscard]] bool settle_early(u64 now_ns) noexcept;
@@ -1183,7 +1186,8 @@ private:
     [[nodiscard]] u64 three_ptos() const noexcept;
 
     memory::IAllocator& m_allocator;
-    QuicConnectionConfig m_config; // its spans are copied below and cleared
+    // Its spans are copied below and cleared; its parameters become this side's own, filled when it starts.
+    QuicConnectionConfig m_config;
     // Each packet number space's sent-packet storage (number_space()), lent to the recovery while the space is one.
     struct SentStore
     {
@@ -1237,7 +1241,6 @@ private:
     u32 m_control_reserved = 0U;  // the path controls' blocks taken at construction
 
     QuicConnectionState m_state = QuicConnectionState::Idle;
-    QuicTransportParameters m_local;
     QuicTransportParameters m_peer;
     bool m_peer_known = false;
     bool m_multipath = false;    // both ends offered initial_max_path_id (RFC 10069 section 2)
@@ -1262,8 +1265,8 @@ private:
     PathStatusEntry m_local_statuses[kQuicMaxPaths];
     // The path IDs being abandoned: at most one per ID space open, so kQuicMaxPaths. An entry is free unless used.
     QuicPathAbandon m_abandons[kQuicMaxPaths];
-    QuicTransportParameters m_remembered; // a client's for 0-RTT: its server's from the ticket's connection
-    bool m_early_sending = false;         // a client sends 0-RTT under m_remembered until its server decides
+    u64 m_early_udp_payload = 0U;         // a client's 0-RTT: the max_udp_payload_size its ticket remembers
+    bool m_early_sending = false;         // a client sends 0-RTT under read_remembered() until its server decides
     bool m_early_settled = false;         // a server decided on 0-RTT
     bool m_packet_early = false;          // the packet being read is a 0-RTT packet
     u64 m_early_key_ns = kNeverNs;        // when a server's 0-RTT keys go (RFC 9001 section 4.9.3)

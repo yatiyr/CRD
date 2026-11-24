@@ -583,8 +583,8 @@ bool QuicConnection::start(u64 now_ns) noexcept
     // A server's early data context: the parameters its 0-RTT depends on, then the application's part.
     if (m_early_context != nullptr)
     {
-        static_cast<void>(
-            write_quic_early_parameters(m_local, cont::Span<u8>(m_early_context, kQuicEarlyParameterBytes)));
+        static_cast<void>(write_quic_early_parameters(m_config.parameters,
+                                                      cont::Span<u8>(m_early_context, kQuicEarlyParameterBytes)));
     }
     if (bytes == 0U || m_handshake.set_version(m_config.version) != crypto::TlsError::None ||
         m_handshake.init(*m_config.tls, cont::ConstSpan<u8>(encoded, bytes), m_config.tickets, {},
@@ -594,7 +594,7 @@ bool QuicConnection::start(u64 now_ns) noexcept
         return false;
     }
     m_state = QuicConnectionState::Handshaking;
-    m_idle_ns = m_local.max_idle_timeout * kNsPerMs;
+    m_idle_ns = m_config.parameters.max_idle_timeout * kNsPerMs;
     restart_idle(now_ns);
     return true;
 }
@@ -603,43 +603,43 @@ void QuicConnection::fill_local_parameters() noexcept
 {
     m_protection.accept_cleared_quic_bit(m_config.grease_quic_bit);
     m_protection.set_key_update_interval(m_config.key_update_interval);
-    m_local = m_config.parameters;
-    m_streams.fill_parameters(m_local);
-    m_datagrams.fill_parameters(m_local);
-    m_local.has_initial_source_connection_id = true;
-    m_local.initial_source_connection_id = m_local_cid;
+    m_streams.fill_parameters(m_config.parameters);
+    m_datagrams.fill_parameters(m_config.parameters);
+    m_config.parameters.has_initial_source_connection_id = true;
+    m_config.parameters.initial_source_connection_id = m_local_cid;
     if (m_config.side == crypto::QuicSide::Server)
     {
-        m_local.has_original_destination_connection_id = true;
-        m_local.original_destination_connection_id = m_original_dcid;
-        m_local.has_retry_source_connection_id = m_retried;
+        m_config.parameters.has_original_destination_connection_id = true;
+        m_config.parameters.original_destination_connection_id = m_original_dcid;
+        m_config.parameters.has_retry_source_connection_id = m_retried;
         if (m_retried)
         {
-            m_local.retry_source_connection_id = m_initial_dcid;
+            m_config.parameters.retry_source_connection_id = m_initial_dcid;
         }
         // Sequence 0's token: a client's transport parameters are not confidential, so only a server sends one.
         const QuicLocalCid* first = m_cids.local(0U, 0U);
-        m_local.has_stateless_reset_token = m_config.ids != nullptr && first != nullptr;
+        m_config.parameters.has_stateless_reset_token = m_config.ids != nullptr && first != nullptr;
         if (first != nullptr)
         {
-            std::memcpy(m_local.stateless_reset_token, first->reset_token, kQuicResetTokenBytes);
+            std::memcpy(m_config.parameters.stateless_reset_token, first->reset_token, kQuicResetTokenBytes);
         }
         // Sequence 1 is the preferred address's (accept()), absent when the connection opened on its socket.
         const QuicLocalCid* preferred = m_cids.local(0U, 1U);
-        m_local.has_preferred_address = preferred != nullptr;
+        m_config.parameters.has_preferred_address = preferred != nullptr;
         if (preferred != nullptr)
         {
-            m_local.preferred_address.connection_id = preferred->id;
-            std::memcpy(m_local.preferred_address.reset_token, preferred->reset_token, kQuicResetTokenBytes);
+            m_config.parameters.preferred_address.connection_id = preferred->id;
+            std::memcpy(m_config.parameters.preferred_address.reset_token, preferred->reset_token,
+                        kQuicResetTokenBytes);
         }
     }
-    m_local.grease_quic_bit = m_config.grease_quic_bit;
-    m_local.has_version_information = true;
-    m_local.version_information.chosen = static_cast<u32>(m_config.version);
-    m_local.version_information.available_count = m_version_count;
+    m_config.parameters.grease_quic_bit = m_config.grease_quic_bit;
+    m_config.parameters.has_version_information = true;
+    m_config.parameters.version_information.chosen = static_cast<u32>(m_config.version);
+    m_config.parameters.version_information.available_count = m_version_count;
     for (usize index = 0U; index < m_version_count; ++index)
     {
-        m_local.version_information.available[index] = m_versions[index];
+        m_config.parameters.version_information.available[index] = m_versions[index];
     }
 }
 
@@ -728,7 +728,7 @@ bool QuicConnection::start_keyed(const QuicKeyedStart& start, u64 now_ns) noexce
         m_first_paths.paths.set_validated(m_first_paths.paths.active());
     }
     m_state = QuicConnectionState::Established;
-    m_idle_ns = m_local.max_idle_timeout * kNsPerMs;
+    m_idle_ns = m_config.parameters.max_idle_timeout * kNsPerMs;
     discard_space(QuicSpace::Initial, now_ns);
     confirm(now_ns);
     restart_idle(now_ns);
@@ -742,14 +742,21 @@ bool QuicConnection::begin_early() noexcept
         return true;
     }
     // Parameters that no longer parse send nothing early: the data waits for the 1-RTT keys.
-    if (read_quic_transport_parameters(m_handshake.remembered_transport_parameters(), crypto::QuicSide::Server,
-                                       m_remembered) != QuicTransportError::NoError)
+    QuicTransportParameters remembered;
+    if (!read_remembered(remembered))
     {
         return true;
     }
-    apply_peer_limits(m_remembered);
+    apply_peer_limits(remembered);
+    m_early_udp_payload = remembered.max_udp_payload_size;
     m_early_sending = true;
     return m_protection.install(m_handshake) == crypto::CryptoError::None;
+}
+
+bool QuicConnection::read_remembered(QuicTransportParameters& out) const noexcept
+{
+    return read_quic_transport_parameters(m_handshake.remembered_transport_parameters(), crypto::QuicSide::Server,
+                                          out) == QuicTransportError::NoError;
 }
 
 u32 QuicConnection::peer_ceiling() const noexcept
@@ -805,7 +812,9 @@ bool QuicConnection::settle_early(u64 now_ns) noexcept
         // The server's parameters apply from now on (RFC 9000 section 7.4.1); a limit the 0-RTT packets kept to that
         // they lower closes the connection (RFC 9221 section 3 names PROTOCOL_VIOLATION for its size).
         m_early_sending = false;
-        if (quic_check_remembered_parameters(m_remembered, m_peer) != QuicTransportError::NoError)
+        QuicTransportParameters remembered;
+        if (!read_remembered(remembered) ||
+            quic_check_remembered_parameters(remembered, m_peer) != QuicTransportError::NoError)
         {
             fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
             return false;
@@ -831,7 +840,8 @@ void QuicConnection::reject_early(u64 now_ns) noexcept
 
 usize QuicConnection::encode_parameters(cont::Span<u8> out) noexcept
 {
-    return write_quic_transport_parameters(m_local, m_config.side, QuicTransportParameterGrease{entropy()}, out);
+    return write_quic_transport_parameters(m_config.parameters, m_config.side,
+                                           QuicTransportParameterGrease{entropy()}, out);
 }
 
 usize QuicConnection::HelloAnswer::answer(cont::ConstSpan<u8> client, crypto::QuicVersion& version,
@@ -855,13 +865,13 @@ usize QuicConnection::HelloAnswer::answer(cont::ConstSpan<u8> client, crypto::Qu
     }
     // Nothing is sent before the switch but acknowledgements in the original version (RFC 9369 section 4.1). A key
     // the provider cannot derive, or parameters that do not fit, fail the handshake (an answer past its room).
-    connection.m_local.version_information.chosen = chosen;
+    connection.m_config.parameters.version_information.chosen = chosen;
     const usize bytes = connection.encode_parameters(out);
     if (bytes == 0U ||
         connection.m_protection.change_version(static_cast<crypto::QuicVersion>(chosen),
                                                connection.m_initial_dcid.view()) != crypto::CryptoError::None)
     {
-        connection.m_local.version_information.chosen = original;
+        connection.m_config.parameters.version_information.chosen = original;
         return out.size() + 1U;
     }
     version = static_cast<crypto::QuicVersion>(chosen);
@@ -921,8 +931,8 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
     m_candidate = path;
     // A server's address changes only to its preferred one (sections 9 and 9.6.2): its other sockets are not the
     // connection's, nor, once it moved, the one it left.
-    const bool preferred_socket = handshake_slot(m_receive_slot) && m_local.has_preferred_address && !m_on_preferred &&
-                                  path.socket == m_config.preferred_socket;
+    const bool preferred_socket = handshake_slot(m_receive_slot) && m_config.parameters.has_preferred_address &&
+                                  !m_on_preferred && path.socket == m_config.preferred_socket;
     if (m_config.side == crypto::QuicSide::Server && current.peer.port != 0U && path.socket != current.socket &&
         !preferred_socket)
     {
@@ -1429,12 +1439,13 @@ bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_
         // draft-ietf-quic-receive-ts-03: never asked for, the frame is of no known type (as RFC 9000 section
         // 12.4 reads an unnegotiated extension's frame); outside 1-RTT packets or past the maximum asked
         // for, it breaks the draft's sections 4 and 6.
-        if (m_local.max_receive_timestamps_per_ack == 0U)
+        if (m_config.parameters.max_receive_timestamps_per_ack == 0U)
         {
             fail(QuicTransportError::FrameEncodingError, 0U, now_ns);
             return false;
         }
-        if (space != QuicSpace::Application || frame.ack.timestamp_count > m_local.max_receive_timestamps_per_ack)
+        if (space != QuicSpace::Application ||
+            frame.ack.timestamp_count > m_config.parameters.max_receive_timestamps_per_ack)
         {
             fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
             return false;
@@ -1463,7 +1474,7 @@ bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_
     {
         // Path ID 0's packets, read in its own slot: never those of a later path ID slot 0 was reclaimed for.
         m_counters.receive_timestamps +=
-            m_peer_times.read(frame.ack, m_local.receive_timestamps_exponent, *m_recovery, now_ns);
+            m_peer_times.read(frame.ack, m_config.parameters.receive_timestamps_exponent, *m_recovery, now_ns);
     }
     const usize via = application ? m_receive_slot : 0U;
     m_event_ns = now_ns;
@@ -1760,7 +1771,7 @@ bool QuicConnection::read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_n
     }
     if (error == QuicTransportError::NoError)
     {
-        error = quic_check_multipath(m_local, m_peer, m_peer_scid.bytes == 0U || m_local_cid.bytes == 0U);
+        error = quic_check_multipath(m_config.parameters, m_peer, m_peer_scid.bytes == 0U || m_local_cid.bytes == 0U);
     }
     if (error != QuicTransportError::NoError)
     {
@@ -1768,18 +1779,18 @@ bool QuicConnection::read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_n
         return false;
     }
     m_peer_known = true;
-    m_multipath = quic_multipath_negotiated(m_local, m_peer);
+    m_multipath = quic_multipath_negotiated(m_config.parameters, m_peer);
     m_peer_max_path_id = m_multipath ? m_peer.initial_max_path_id : 0U;
-    m_local_max_path_id = m_multipath ? m_local.initial_max_path_id : 0U;
+    m_local_max_path_id = m_multipath ? m_config.parameters.initial_max_path_id : 0U;
     open_id_spaces();
     apply_peer_limits(m_peer);
     m_recovery->set_peer_parameters(m_peer.max_ack_delay * kNsPerMs, m_peer.ack_delay_exponent, now_ns);
     // Timestamps are reported only by a side that asks for them too: the draft is behind its NET-STD flag.
     m_recovery->set_receive_timestamps(
-        (m_local.max_receive_timestamps_per_ack == 0U) ? 0U : m_peer.max_receive_timestamps_per_ack,
+        (m_config.parameters.max_receive_timestamps_per_ack == 0U) ? 0U : m_peer.max_receive_timestamps_per_ack,
         m_peer.receive_timestamps_exponent);
     m_peer_greases = m_peer.grease_quic_bit;
-    const u64 local_idle = m_local.max_idle_timeout;
+    const u64 local_idle = m_config.parameters.max_idle_timeout;
     const u64 peer_idle = m_peer.max_idle_timeout;
     const u64 idle_ms =
         (local_idle == 0U || peer_idle == 0U) ? max_u64(local_idle, peer_idle) : min_u64(local_idle, peer_idle);
@@ -1817,7 +1828,7 @@ bool QuicConnection::new_connection_id(const QuicFrame& frame, u64 now_ns) noexc
         return false;
     }
     bool added = false;
-    const QuicTransportError error = m_cids.add_peer(frame, m_local.active_connection_id_limit, added);
+    const QuicTransportError error = m_cids.add_peer(frame, m_config.parameters.active_connection_id_limit, added);
     if (error != QuicTransportError::NoError)
     {
         fail(error, 0U, now_ns);
@@ -1859,7 +1870,8 @@ void QuicConnection::open_id_spaces() noexcept
 {
     // Rising path IDs from 1, one ID space of the pool each: within kQuicMaxPaths, never consumed before. A path ID
     // that closes hands its storage to the next one (close_abandoned).
-    for (u64 path_id = 1U; m_multipath && m_slots != nullptr && path_id <= m_local.initial_max_path_id; ++path_id)
+    for (u64 path_id = 1U; m_multipath && m_slots != nullptr && path_id <= m_config.parameters.initial_max_path_id;
+         ++path_id)
     {
         static_cast<void>(m_cids.open(path_id, m_slots[path_id - 1U].ids));
     }
@@ -3109,7 +3121,7 @@ usize QuicConnection::write_owed_ids(cont::Span<u8> frames, u64 packet, Written&
 
 bool QuicConnection::observation_due(usize index) const noexcept
 {
-    return m_peer_known && quic_provides_addresses(m_local.address_discovery) &&
+    return m_peer_known && quic_provides_addresses(m_config.parameters.address_discovery) &&
            quic_wants_addresses(m_peer.address_discovery) && tuples(send_slot()).observation_owed(index) &&
            tuples(send_slot()).path(index).peer.port != 0U && m_frame_count < m_config.sent_frames;
 }
@@ -3117,7 +3129,7 @@ bool QuicConnection::observation_due(usize index) const noexcept
 bool QuicConnection::observed_address_frame(const QuicFrame& frame, u64 now_ns) noexcept
 {
     // Only an end that asked for reports takes them (draft-ietf-quic-address-discovery-01 section 4.1).
-    if (!quic_wants_addresses(m_local.address_discovery))
+    if (!quic_wants_addresses(m_config.parameters.address_discovery))
     {
         fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
         return false;
@@ -3511,7 +3523,7 @@ usize QuicConnection::datagram_limit(usize slot, usize out_bytes) const noexcept
     usize limit = min_u64(out_bytes, path.datagram_bytes());
     if (m_peer_known || m_early_sending)
     {
-        limit = min_u64(limit, (m_peer_known ? m_peer : m_remembered).max_udp_payload_size);
+        limit = min_u64(limit, m_peer_known ? m_peer.max_udp_payload_size : m_early_udp_payload);
     }
     const QuicPaths& paths = tuples(slot);
     const usize active = paths.active();
@@ -4532,7 +4544,7 @@ void QuicConnection::drop_path(usize slot, usize index, u64 now_ns) noexcept
         return;
     }
     // An ID sent to on the forgotten path alone is retired, so that no later path is linked to it (section 9.5).
-    if (!m_cids.retire_peer(path_id, sequence, m_local.active_connection_id_limit))
+    if (!m_cids.retire_peer(path_id, sequence, m_config.parameters.active_connection_id_limit))
     {
         fail(QuicTransportError::ConnectionIdLimitError, 0U, now_ns);
     }
