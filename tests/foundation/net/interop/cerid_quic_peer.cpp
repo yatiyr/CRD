@@ -351,7 +351,9 @@ void serve_webtransport(EchoPeer& peer, QuicHandle handle, QuicConnection& conne
 }
 
 // One turn of HTTP/3 on a connection.
-void serve_http3(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, const EchoTurn& turn) noexcept
+// `echo` is the connection's (serve() found it).
+void serve_http3(EchoPeer& peer, const Echo& echo, QuicHandle handle, QuicConnection& connection,
+                 const EchoTurn& turn) noexcept
 {
     const u64 index = peer.index_of(handle);
     Http3Run run;
@@ -360,7 +362,7 @@ void serve_http3(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, 
     run.datagrams = g_options->datagrams;
     run.datagram_bytes = g_options->datagram_bytes;
     run.remembered = index != 0U && g_options->early ? g_exchanges[index - 1U].peer_settings() : nullptr;
-    run.tickets = peer.echo_of(handle)->tickets();
+    run.tickets = echo.tickets();
     bool done = false;
     const u64 error = g_exchanges[index].service(connection, run, turn, done);
     if (error != 0U)
@@ -406,7 +408,7 @@ void serve(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, u64 no
     if (g_options->http3.enabled != 0)
     {
         echo->note_established(turn.established);
-        serve_http3(peer, handle, connection, turn);
+        serve_http3(peer, *echo, handle, connection, turn);
         return;
     }
     if (echo->service(connection.streams(), connection.datagrams(), turn))
