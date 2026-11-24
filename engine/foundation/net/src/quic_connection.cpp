@@ -2017,7 +2017,7 @@ void QuicConnection::pull_crypto(u64 now_ns) noexcept
             out.capacity() == 0U)
         {
             // Refused with nothing owed, no acknowledgement would ever make room. Refused with data owed, the buffer
-            // takes what fits and the rest waits for the room acknowledgements free.
+            // takes what fits and the rest waits for a later send's growth or the room acknowledgements free.
             fail(QuicTransportError::InternalError, 0U, now_ns);
             return;
         }

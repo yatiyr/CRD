@@ -54,7 +54,12 @@ struct Identity
     crypto::TlsContext server;
     crypto::TlsContext plain;
 
-    explicit Identity(bool wrong_pin = false, crypto::ReplayFilter* early = nullptr)
+    using Groups = cont::ConstSpan<crypto::AlgorithmId>;
+
+    // Each end's key exchange groups, preferred first: a client shares its first alone, so a server preferring
+    // another draws a HelloRetryRequest (RFC 8446 section 4.1.4).
+    explicit Identity(bool wrong_pin = false, crypto::ReplayFilter* early = nullptr,
+                      Groups client_groups = Groups(kGroups), Groups server_groups = Groups(kGroups))
     {
         u8 seed[32];
         for (usize i = 0U; i < sizeof(seed); ++i)
@@ -73,7 +78,7 @@ struct Identity
 
         crypto::TlsConfig client_config;
         client_config.role = crypto::TlsRole::Client;
-        client_config.groups = kGroups;
+        client_config.groups = client_groups;
         client_config.signatures = kSignatures;
         client_config.aeads = kAeads;
         client_config.pinned = cont::ConstSpan<crypto::KeyId>(&pin, 1U);
@@ -84,7 +89,7 @@ struct Identity
 
         crypto::TlsConfig server_config;
         server_config.role = crypto::TlsRole::Server;
-        server_config.groups = kGroups;
+        server_config.groups = server_groups;
         server_config.aeads = kAeads;
         server_config.credential = &credential;
         server_config.server_name = kServerName;

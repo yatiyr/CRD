@@ -46,7 +46,7 @@ inline bool same(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b)
     return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
 }
 
-// Counts calls and refuses once `refuse_after` allocations have been made.
+// Counts calls and refuses once `refuse_after` allocations have been made, or the one `refuse_call` names.
 class CountingAllocator final : public crd::memory::IAllocator
 {
 public:
@@ -54,6 +54,11 @@ public:
     {
         if (m_calls >= m_refuse_after)
         {
+            return nullptr;
+        }
+        if (m_calls == m_refused_call)
+        {
+            m_refused_call = ~usize{0};
             return nullptr;
         }
         ++m_calls;
@@ -72,11 +77,14 @@ public:
     [[nodiscard]] usize calls() const noexcept { return m_calls; }
     [[nodiscard]] usize live() const noexcept { return m_live; } // blocks given and not yet returned
     void refuse_after(usize calls) noexcept { m_refuse_after = calls; }
+    // Refuses the allocation that would be call number `call` (from 0, as calls() counts) once, then allocates again.
+    void refuse_call(usize call) noexcept { m_refused_call = call; }
 
 private:
     usize m_calls = 0U;
     usize m_live = 0U;
     usize m_refuse_after = ~usize{0};
+    usize m_refused_call = ~usize{0};
 };
 
 inline constexpr usize kDatagramBytes = 1500U;

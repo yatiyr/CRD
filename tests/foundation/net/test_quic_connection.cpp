@@ -1488,28 +1488,7 @@ public:
     // Runs the handshake to the server's completion; `before_finished` runs with the client holding Handshake keys.
     template <typename Before> void handshake(Before before_finished)
     {
-        QuicTransportParameters parameters;
-        parameters.max_idle_timeout = 30000U;
-        parameters.address_discovery = discovery;
-        parameters.has_initial_max_path_id = multipath;
-        parameters.initial_max_path_id = multipath ? max_path_id : 0U;
-        parameters.has_initial_source_connection_id = true;
-        REQUIRE(parameters.initial_source_connection_id.assign(own_cid()));
-        u8 encoded[512];
-        const usize bytes =
-            write_quic_transport_parameters(parameters, QuicSide::Client, {7U}, Span<u8>(encoded, sizeof(encoded)));
-        REQUIRE(bytes != 0U);
-        REQUIRE(raw.handshake.init(m_identity.client, ConstSpan<u8>(encoded, bytes)) == TlsError::None);
-        REQUIRE(raw.protection.start(QuicSide::Client, QuicVersion::V1,
-                                     ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid))) == CryptoError::None);
-        std::memcpy(raw.dcid, kInitialDcid, sizeof(kInitialDcid));
-        raw.dcid_bytes = sizeof(kInitialDcid);
-        QuicAccept accept;
-        accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
-        accept.client_dcid = ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid));
-        accept.client_scid = own_cid();
-        accept.original_dcid = accept.client_dcid;
-        REQUIRE(server.accept(accept, now));
+        begin();
         send_crypto(QuicLevel::Initial);
         if (empty_scid && server.state() == QuicConnectionState::Closing)
         {
@@ -1532,16 +1511,46 @@ public:
         handshake([] {});
     }
 
-    // Sends the handshake's CRYPTO data at `level`, one packet per datagram, and reads what the server answers.
-    void send_crypto(QuicLevel level)
+    // The raw client's TLS and Initial keys, and the server accepting its connection: nothing sent yet.
+    void begin()
+    {
+        QuicTransportParameters parameters;
+        parameters.max_idle_timeout = 30000U;
+        parameters.address_discovery = discovery;
+        parameters.has_initial_max_path_id = multipath;
+        parameters.initial_max_path_id = multipath ? max_path_id : 0U;
+        parameters.has_initial_source_connection_id = true;
+        REQUIRE(parameters.initial_source_connection_id.assign(own_cid()));
+        u8 encoded[512];
+        const usize bytes =
+            write_quic_transport_parameters(parameters, QuicSide::Client, {7U}, Span<u8>(encoded, sizeof(encoded)));
+        REQUIRE(bytes != 0U);
+        REQUIRE(raw.handshake.init(m_identity.client, ConstSpan<u8>(encoded, bytes)) == TlsError::None);
+        REQUIRE(raw.protection.start(QuicSide::Client, QuicVersion::V1,
+                                     ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid))) == CryptoError::None);
+        std::memcpy(raw.dcid, kInitialDcid, sizeof(kInitialDcid));
+        raw.dcid_bytes = sizeof(kInitialDcid);
+        QuicAccept accept;
+        accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
+        accept.client_dcid = ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid));
+        accept.client_scid = own_cid();
+        accept.original_dcid = accept.client_dcid;
+        REQUIRE(server.accept(accept, now));
+    }
+
+    // Sends the handshake's CRYPTO data at `level`, at most `bytes` of it, one packet per datagram, and reads what the
+    // server answers.
+    void send_crypto(QuicLevel level, u64 bytes = ~u64{0})
     {
         REQUIRE(raw.protection.install(raw.handshake) == CryptoError::None);
         const usize index = static_cast<usize>(level);
-        while (raw.handshake.pending(level) > 0U)
+        while (raw.handshake.pending(level) > 0U && bytes > 0U)
         {
             u8 chunk[1000];
             usize taken = 0U;
-            REQUIRE(raw.handshake.take(level, Span<u8>(chunk, sizeof(chunk)), taken) == TlsError::None);
+            const usize want = (bytes < sizeof(chunk)) ? static_cast<usize>(bytes) : sizeof(chunk);
+            REQUIRE(raw.handshake.take(level, Span<u8>(chunk, want), taken) == TlsError::None);
+            bytes -= taken;
             QuicFrame frame;
             frame.kind = QuicFrameKind::Crypto;
             frame.offset = raw.crypto_sent[index];
@@ -9753,6 +9762,50 @@ TEST_CASE("QUIC connection: CRYPTO buffers take storage as the handshake needs i
         CHECK(server.close_info().local);
         CHECK(server.close_info().error_code == code(QuicTransportError::InternalError));
         CHECK(server.buffer_bytes() == 0U);
+    }
+}
+
+TEST_CASE("QUIC connection: a CRYPTO level refused room while it owes data sends what fits, and the rest once its "
+          "storage grows",
+          "[net][4.2a][quic-connection]")
+{
+    // A server preferring a group the client sent no share for answers with a HelloRetryRequest (RFC 8446 section
+    // 4.1.4), which stays owed: the raw client acknowledges nothing. Its second ClientHello draws the ServerHello,
+    // for which the Initial level must grow past the owed request.
+    constexpr AlgorithmId offered[] = {AlgorithmId::X25519, AlgorithmId::Secp384r1};
+    for (const bool refused : {false, true})
+    {
+        INFO("refused " << refused);
+        Identity identity(false, nullptr, Identity::Groups(offered), Identity::Groups(&offered[1], 1U));
+        RawRun run(identity);
+        run.begin();
+        run.send_crypto(QuicLevel::Initial, run.raw.handshake.pending(QuicLevel::Initial)); // the first ClientHello
+        REQUIRE(run.raw.handshake.hello_retry());
+        REQUIRE(run.raw.handshake.pending(QuicLevel::Initial) > 0U); // the second
+        const u64 request = run.raw.crypto_received[static_cast<usize>(QuicLevel::Initial)];
+        REQUIRE(request > 0U);
+        // Its receipt takes the Initial level's receive storage, then grows the send storage: that call is refused.
+        if (refused)
+        {
+            run.allocator.refuse_call(run.allocator.calls() + 1U);
+        }
+        run.send_crypto(QuicLevel::Initial);
+        REQUIRE(run.server.state() == QuicConnectionState::Handshaking);
+        CHECK(run.raw.crypto_received[static_cast<usize>(QuicLevel::Initial)] > request); // the whole ServerHello
+        const u64 flight = run.raw.crypto_received[static_cast<usize>(QuicLevel::Handshake)];
+        if (refused)
+        {
+            // What fitted beside the request went first, coalesced with the Handshake flight the client could not
+            // yet open; the next send grew the storage and took the rest, and the flight comes again on the probe
+            // timeout.
+            CHECK(flight == 0U);
+            run_timers(run, run.now + 3000U * kMs);
+        }
+        CHECK(run.raw.crypto_received[static_cast<usize>(QuicLevel::Handshake)] > 0U);
+        REQUIRE(run.raw.handshake.pending(QuicLevel::Handshake) > 0U); // the client's Finished
+        run.send_crypto(QuicLevel::Handshake);
+        CHECK(run.server.state() == QuicConnectionState::Established);
+        CHECK(run.server.close_info().error_code == 0U);
     }
 }
 
