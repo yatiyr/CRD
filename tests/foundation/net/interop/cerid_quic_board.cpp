@@ -28,7 +28,8 @@
 // `established` among them, `bytes_received` and `bytes_sent` on the streams, the `exchanges` done (a client's answers
 // read, a server's streams answered), the `allocations` the closed connections took once their second exchange had
 // ended (QuicConnection::buffer_allocations: a buffer or table retaken after an idle trim counts; the first exchange's
-// turn may still write the server's session ticket, which takes its CRYPTO buffer once), what every established
+// turn may still write the server's session ticket, which takes its CRYPTO buffer once), the exchanges a client began
+// `trimmed` (its streams' buffers given back by the idle trim, so its stream takes new ones), what every established
 // connection negotiated (`group`, `cipher`, `version`; `mixed` when two differed), `peak_live`, the most connections
 // live at once (a client's started, a server's accepted, and not yet closed), a server's Initials it `refused`, and
 // what the socket handed the host and took from it: `datagrams_sent` and `send_messages`, `datagrams_received` and
@@ -130,8 +131,11 @@ public:
         QuicStreamSet& set = connection.streams();
         if (m_options.client && !work.opened && !work.done && now_ns >= work.due_ns)
         {
-            // Refused while the server's MAX_STREAMS has not come back; its arrival serves the connection again.
+            // Refused while the server's MAX_STREAMS has not come back; its arrival serves the connection again. With
+            // one stream at a time, a closed stream's slot holds no buffer only once the idle trim gave it back.
+            const bool kept = set.buffer_bytes() != 0U;
             work.opened = set.open(true, work.stream) == QuicStreamError::None;
+            m_trimmed += work.opened && work.exchanges != 0U && !kept ? 1U : 0U;
         }
         else if (!m_options.client)
         {
@@ -221,8 +225,8 @@ public:
         std::printf("group=%s\ncipher=%s\nversion=%s\npeak_live=%llu\n", m_mixed ? "mixed" : group_name(m_group),
                     m_mixed ? "mixed" : cipher_name(m_cipher), m_mixed ? "mixed" : version,
                     static_cast<unsigned long long>(m_peak_live));
-        std::printf("exchanges=%llu\nallocations=%llu\n", static_cast<unsigned long long>(m_exchanges),
-                    static_cast<unsigned long long>(m_allocations));
+        std::printf("exchanges=%llu\nallocations=%llu\ntrimmed=%llu\n", static_cast<unsigned long long>(m_exchanges),
+                    static_cast<unsigned long long>(m_allocations), static_cast<unsigned long long>(m_trimmed));
         std::fflush(stdout);
     }
 
@@ -347,6 +351,7 @@ private:
     u64 m_sent = 0U;
     u64 m_exchanges = 0U;
     u64 m_allocations = 0U;
+    u64 m_trimmed = 0U;
     u64 m_due_ns = kNeverNs;
     QuicHandle m_due;
     AlgorithmId m_group{};

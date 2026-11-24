@@ -19,11 +19,13 @@ workloads every arm runs, and a fourth only crd-net's program has:
   bursts      one connection, the client writes `burst_bytes` and a FIN on a new stream `bursts` times, `gap` apart
               (from the answer's FIN to the next stream), and the server answers each with its FIN: at a gap past three
               PTOs an idle connection gives back what it grew (its closed streams' buffers, its sent-packet tables) and
-              takes it again for the next burst; at a gap below, it keeps them. Each end reports the `allocations` its
-              connection took after the second burst, which must be none per burst at the short gap, and at least one
-              per end at the long one for the arms built from this tree; the retake's cost is the long gap's CPU per
-              burst over the short's, each round, and with --baseline (a build without the trim) that difference over
-              the baseline's
+              takes it again for the next burst; at a gap below, it keeps them. The client reports the bursts it began
+              with its stream buffers given back (`trimmed`) and each end the `allocations` its connection took after
+              the second burst: at the short gap no burst may begin trimmed, and the allocations stay below one per
+              burst (a kept buffer may still grow to its high-water mark late); at the long one every burst after the
+              first begins trimmed and each end retakes at least one allocation per burst, for the arms built from this
+              tree. The retake's cost is the long gap's CPU per burst over the short's, each round, and with --baseline
+              (a build without the trim) that difference over the baseline's
 
 The driver measures from outside: each process's user and system CPU time (os.wait4) and the client's wall time. Each
 workload runs at two sizes, and the cost is the slope between them, (cost at the larger minus cost at the smaller) over
@@ -56,7 +58,7 @@ GROUP = 'secp256r1'
 MIB = 1 << 20
 COUNTS = ('datagrams_sent', 'send_messages', 'datagrams_received', 'receive_messages')
 WAITS = ('waits', 'wait_timeouts', 'wait_asked_ns', 'wait_ns')  # crd-net's loop only
-OWN = WAITS + ('exchanges', 'allocations')  # crd-net's program only
+OWN = WAITS + ('exchanges', 'allocations', 'trimmed')  # crd-net's program only
 
 
 class Arm:
@@ -192,15 +194,21 @@ def board(arms, rounds, sizes, parallel, window, burst_bytes, gaps):
 
 
 def check_allocations(arm, gap, gaps, counts):
-    """The short gap keeps what each end grew (no allocation per burst), and the long gap's trim gave it back (at
-    least one per end per burst) where the arm is built from this tree: the two gaps measure what they claim."""
+    """The short gap keeps what each end grew (no burst begins trimmed, under one allocation per burst), and the long
+    gap's trim gave it back (every burst trimmed, at least one allocation per end per burst) where the arm is built
+    from this tree: the two gaps measure what they claim."""
+    trimmed = counts[('client', 'trimmed')]
+    if gap == gaps[0] and trimmed != 0:
+        raise AssertionError(f'{arm.name}: {trimmed:.2f} of the bursts {gap} ms apart began trimmed')
+    if gap == gaps[1] and arm.trims and trimmed != 1:
+        raise AssertionError(f'{arm.name}: {trimmed:.2f} of the bursts {gap} ms apart began trimmed, not all')
     for role in ('server', 'client'):
         taken = counts[(role, 'allocations')]
-        if gap == gaps[0] and taken != 0:
+        if gap == gaps[0] and taken >= 1:
             raise AssertionError(f'{arm.name}: the {role} took {taken:.2f} allocations per burst {gap} ms apart')
         if gap == gaps[1] and arm.trims and taken < 1:
             raise AssertionError(f'{arm.name}: the {role} took {taken:.2f} allocations per burst {gap} ms apart: '
-                                 'nothing was trimmed')
+                                 'nothing was retaken')
 
 
 def rate(seconds, scale=1):
@@ -342,7 +350,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--cerid', required=True, help='crd-quic-board')
     parser.add_argument('--msquic', help='crd-msquic-quic-board')
-    parser.add_argument('--baseline', help="another build's crd-quic-board, run interleaved as its own offload arm")
+    parser.add_argument('--baseline', help="another build's crd-quic-board, run interleaved as its own offload arm "
+                        "(built with this tree's cerid_quic_board.cpp: an older program reports no exchanges)")
     parser.add_argument('--workload', choices=('all',) + WORKLOADS, default='all')
     parser.add_argument('--rounds', type=int, default=5)
     parser.add_argument('--handshakes', type=pair, default=(200, 2000), help='connections at the two sizes')
