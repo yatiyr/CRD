@@ -12,32 +12,39 @@ da311710 has finished. Fuzz host-check 45446014204 was dispatched on b2ee3435.
 ## What landed
 
 - `crd-quic-board --bursts N --gap MS`: a client's one connection opens a new stream per exchange, `gap` after the
-  last answer came; a server answers each stream as it comes. Each end reports its `exchanges` and the `allocations`
-  its connection took once the second exchange ended: every 20 ms run of 50 bursts showed one server allocation right
-  after the first exchange, outside the streams, keys and table bytes (the session ticket's CRYPTO buffer), which made
-  a first-exchange baseline count it in some runs and not others.
+  last answer came; a server answers each stream as it comes. Each end reports its `exchanges`, the client the bursts
+  it began `trimmed` (its slot's buffers given back), and each end the `allocations` its connection took once the
+  second exchange ended: every 20 ms run of 50 bursts showed one server allocation right after the first exchange,
+  outside the streams, keys and table bytes (the session ticket's CRYPTO buffer).
 - `quic_board.py --workload bursts` (crd-net's arms only): CPU per burst as the slope over burst counts at a gap below
   three PTOs (20 ms, kept) and past them (300 ms, trimmed), the latency past the gap and the loop's waits, and the
   retake round by round: the long gap over the short, and that over a `--baseline` build without the trim. It refuses
-  a short gap that allocated, or an arm of this tree whose long gap did not retake at both ends; `--check` runs it.
+  a short gap with a trimmed burst or a whole allocation per burst, and an arm of this tree whose long gap left a burst
+  untrimmed or an end with no retake; `--check` runs it (108 runs pinned to two cores, 48 of them four at once, pass).
+- At 64 KiB a kept server buffer may still reach its high-water mark late (one doubling at exchange 4 to 26 in 4 of 12
+  runs), so the short gap allows growth below one allocation per burst instead of none.
 
 ## Evidence
 
-Board: 7 rounds, 10 and 110 bursts of 4 KiB, interleaved with f73663f9's engine built with this board program.
+Boards interleaved with f73663f9's engine built with this board program (it trims grown tables, not stream buffers).
+CPU per burst both ends, 20 / 300 ms gaps; the retake is the per-round difference of differences (median, range).
 
-| arm | gap ms | CPU us per burst | ms past the gap | loop waits per burst | allocations per burst (server, client) |
+| bursts | arm | CPU us per burst | ms past the gap | allocations per burst at 300 ms (server, client) | retake over f73663f9 |
 |---|---|---|---|---|---|
-| crd-net | 20 / 300 | 264.7 / 1,788.2 | 0.31 / 0.66 | 7.9 / 65.0 | 0, 0 / 1, 1 |
-| f73663f9 | 20 / 300 | 296.0 / 1,802.4 | 0.32 / 0.69 | 7.9 / 63.2 | 0, 0 / 0, 0 |
-| crd-net, no offload | 20 / 300 | 307.2 / 1,856.9 | 0.35 / 0.75 | 8.1 / 64.5 | 0, 0 / 1, 1 |
+| 4 KiB, 7 rounds, 10 and 110 | crd-net | 307.3 / 1,914.7 | 0.35 / 0.70 | 1.00, 1.00 | 8.0 us (-194.2 to 197.5) |
+| | no offload | 318.8 / 1,842.9 | 0.31 / 0.66 | 1.00, 1.00 | -162.6 us (-219.1 to 556.3) |
+| | f73663f9 | 313.1 / 1,957.0 | 0.36 / 0.72 | 0.00, 0.00 | |
+| 64 KiB, 5 rounds, 10 and 70 | crd-net | 404.9 / 2,040.5 | 0.37 / 0.81 | 4.90, 4.00 | 49.6 us (-155.8 to 234.1) |
+| | no offload | 532.4 / 2,040.4 | 0.47 / 0.91 | 4.95, 4.03 | -9.3 us (-214.4 to -1.2) |
+| | f73663f9 | 450.5 / 2,016.8 | 0.40 / 0.86 | 0.00, 2.97 | |
 
-- The retake, per burst over the baseline's (median of rounds, least to most): 21.3 us (-264.1 to 93.6) with
-  offload, 31.9 us (-199.7 to 187.8) without: inside the rounds' spread, and no latency past the gap (0.66 against
-  0.69 ms). A 300 ms gap's own 1.5 ms per burst is the board's waits, capped at 10 ms (57 more per burst at both
-  builds), not the trim.
-- `quic_board.py --check` with msquic passes; Allman, repository and master-plan validators pass.
+- The retake (one 4 KiB buffer per end, or a 64 KiB buffer's doublings and the regrown sent tables) sits inside the
+  rounds' spread, about 200 us per burst on this host, and adds no latency past the gap. A 300 ms gap's own 1.5 ms per
+  burst is the board loop's waits, capped at 10 ms (about 56 more per burst at both builds), not the trim.
+- `quic_board.py --check` with msquic passes; Allman, repository, generated and master-plan validators pass.
+  clang-tidy was not shown to run on the board program here: CI's tidy job is the check.
 
 ## Next
 
-1. CI: the first finished run containing da311710, and fuzz host-check 45446014204 (`net-quic-connection`).
+1. CI: the first finished run containing da311710 and 175933e2 (tidy included), and fuzz host-check 45446014204.
 2. A held server end below msquic's best rounds: the 25 KiB connection object.
