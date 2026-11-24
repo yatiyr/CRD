@@ -236,7 +236,10 @@ def cases(cerid, peer):
         yield case(requests=8, goaway='notice')
         yield case(requests=8, goaway='reject')
         yield case(requests=8, goaway='client')
-        yield case(requests=4, cancel='client', response_bytes=1 << 20)
+        # The stream window holds less than the response, so the cancel always meets it unfinished: a window holding
+        # it whole lets a fast server end it first, and RFC 9113 section 5.1 has the server ignore the RST_STREAM of
+        # a closed stream (CI 45284160004, its cancel not seen).
+        yield case(requests=4, cancel='client', response_bytes=1 << 20, window=1 << 16)
         yield case(requests=4, cancel='server')
         for seed in (1, 2, 3):
             yield case(requests=16, request_bytes=32 << 10, response_bytes=32 << 10, padding=True,
