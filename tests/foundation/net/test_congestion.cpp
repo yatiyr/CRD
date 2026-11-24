@@ -1,15 +1,16 @@
 // crd-net -- congestion control and pacing (NET-PATH; docs/design/network-foundation.md#congestion): the policy's
 // bounds and RFC 9002 section 7.2's initial window, slow start and NewReno's avoidance (appendix B) with one reduction
-// per recovery period, persistent congestion, no growth while the window was not what held sending back (section
-// 7.8), HyStart++ (RFC 9406) into and out of its conservative phase and on to avoidance, CUBIC (RFC 9438) against its
-// curve worked in floating point, its Reno-friendly region, fast convergence and idle periods, the undo of a period
-// whose every loss proved spurious and never of a mark, a live swap carrying the window and the recovery period, a
-// Retry's reset, the window controllers' send quantum (a held flight's burst; a restart after idle into a shallow
-// queue on a fast short path loses no more than the initial window's burst would) and its train cap (grown from
-// proven trains one probe at a time, a probe's loss teaching it without a congestion event, a fuller queue's loss
-// with one, the cap coming back from an undone period; under coarse host turns no worse than the initial window's
-// burst on a shallow queue and filling a deep one's link, beside a version 7 flow too), a burst bounded by half a
-// flight that ran out of data, and the pacer's exact credit, burst, debt and release times.
+// per recovery period, persistent congestion, no growth while the window was not what held sending back (section 7.8),
+// HyStart++ (RFC 9406) into and out of its conservative phase and on to avoidance, CUBIC (RFC 9438) against its curve
+// worked in floating point, its Reno-friendly region, fast convergence and idle periods, the undo of a period whose
+// every loss proved spurious and never of a mark, a live swap carrying the window and the recovery period, a Retry's
+// reset, the window controllers' send quantum (a held flight's burst; a restart after idle into a shallow queue on a
+// fast short path loses no more than the initial window's burst would) and its train cap (grown from proven trains one
+// probe at a time and never from an exact-timer host's short trains or a cold flight's first round, a probe's loss
+// teaching it without a congestion event, a fuller queue's loss with one, the cap coming back from an undone period;
+// under coarse host turns no worse than the initial window's burst on a shallow queue and filling a deep one's link,
+// beside a version 7 flow too), a burst bounded by half a flight that ran out of data, and the pacer's exact credit,
+// burst, debt and release times.
 
 #include "bottleneck_fixture.hpp"
 
@@ -106,10 +107,11 @@ struct Trains
     u64 offset[kKept] = {};
     bool lost[kKept] = {};
 
-    // A train of `bytes` a millisecond on; its first packet's number.
-    u64 train(u64 bytes)
+    // A train of `bytes` a millisecond on, or with `drained` at once from nothing in flight (the first flight, or a
+    // host turn's after its acknowledgements emptied the flight); its first packet's number.
+    u64 train(u64 bytes, bool drained = false)
     {
-        now += kMs;
+        now += drained ? 0U : kMs;
         const u64 first = next;
         for (u64 before = 0U; before < bytes; before += kMss)
         {
@@ -118,7 +120,7 @@ struct Trains
             sent[next % kKept] = now;
             offset[next % kKept] = before;
             lost[next % kKept] = false;
-            c->on_sent(out, 100000U + before + kMss, now);
+            c->on_sent(out, (drained ? 0U : 100000U) + before + kMss, now);
             ++next;
         }
         c->on_limited(false, now);
@@ -149,9 +151,9 @@ struct Trains
         c->on_ack_end(rtt_of(kMs, kMs), true, 100000U, now);
     }
 
-    void round(u64 bytes)
+    void round(u64 bytes, bool drained = false)
     {
-        static_cast<void>(train(bytes));
+        static_cast<void>(train(bytes, drained));
         ack_all();
     }
 };
@@ -523,6 +525,52 @@ TEST_CASE("congestion: a period whose train loss proved spurious gives the train
     }
 }
 
+TEST_CASE("congestion: neither a cold flight's first round (the first, or one after idle) nor trains short of the "
+          "proven length grow the train cap, so an exact-timer host keeps the initial window's burst",
+          "[net][net-path][congestion]")
+{
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        INFO("algorithm " << static_cast<int>(algorithm));
+        // From nothing in flight the initial window leaves in one train, then ACK-clocked trains of two datagrams
+        // (an exact-timer host's): the cap stays the initial window, as does what a live swap carries.
+        const Controller c(policy_of(algorithm));
+        const QuicRtt rtt = rtt_of(kMs, kMs);
+        Trains s{c};
+        s.round(12000U, true);
+        for (u32 round = 0U; round < 8U; ++round)
+        {
+            s.round(2U * kMss);
+            CHECK(c->state().train_cap == 12000U);
+            CHECK(c->burst(rtt) == 12000U);
+        }
+        const CongestionState held = c->state();
+        const Controller swapped(policy_of(algorithm), kMss, &held);
+        CHECK(swapped->burst(rtt) == 12000U);
+        // A train that reaches the proven length, as a coarse host's turn sends it at the instant its
+        // acknowledgements emptied the flight: the cap doubles at that round's end.
+        s.round(12000U, true);
+        CHECK(c->state().train_cap == 24000U);
+        CHECK(c->burst(rtt) == 24000U);
+    }
+    // On a 1 Gbit/s, 2 ms path with a 12 KB queue and exact timers, the unproven 24000 bytes of pacer credit sent
+    // ACK-clocked runs of twice the link's rate in slow start and overflowed the queue at a 61,200-byte window: slow
+    // start ended at 114,000 bytes, and over 10 s CUBIC got 87.4% of the link against version 7's 88.3%. Now version
+    // 8 sends what version 7 sends there.
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        INFO("algorithm " << static_cast<int>(algorithm));
+        CongestionPolicy seven = policy_of(algorithm, true);
+        seven.version = 7U;
+        crd::net::testing::Flow old(seven, 125000000U, kMs, 12000U);
+        crd::net::testing::Flow now(policy_of(algorithm, true), 125000000U, kMs, 12000U);
+        old.run(kSecond);
+        now.run(kSecond);
+        CHECK(now.acked_bytes >= old.acked_bytes);
+        CHECK(now.ctl->state().train_cap == 12000U);
+    }
+}
+
 TEST_CASE("congestion: restarts after idle on a fast short path into a shallow queue burst the initial window and pace "
           "their first round at one window per smoothed RTT",
           "[net][net-path][congestion]")
@@ -534,6 +582,8 @@ TEST_CASE("congestion: restarts after idle on a fast short path into a shallow q
     // bandwidth-delay product and its queue) into the queue: 32 drops and 2 reductions, and a version 7 restart from
     // that window the same. Paced at one window per smoothed RTT, the round its ACK clock last ran at: NewReno 1 drop
     // and 1 reduction, CUBIC none, and each MiB delivered 12.4 and 11.5 ms after its write (14.4 and 12.9 before).
+    // Since slow start keeps the initial window's burst on these exact timers (the train cap grows from no train), it
+    // leaves version 7's windows (NewReno 184,990 bytes, CUBIC 203,201): 1 and 0 drops, 11.5 and 11.1 ms.
     for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
     {
         INFO("algorithm " << static_cast<int>(algorithm));

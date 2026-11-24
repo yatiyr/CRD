@@ -137,8 +137,12 @@ public:
             m_limited = true;
             m_restarted = false;
         }
-        // A packet at or past the proven bytes of its train probes the path (teach_train), one train at a time.
-        m_train_longest = max_u64(m_train_longest, packet.train + packet.bytes);
+        // A packet at or past the proven bytes of its train probes the path (teach_train), one train at a time. A
+        // flight's first round from nothing in flight with nothing acknowledged at that instant (the first, or one
+        // after idle) bursts the initial window on any host, so its trains prove nothing longer; one that a host
+        // turn's acknowledgements emptied is a coarse host's train.
+        m_cold_round = m_cold_round || (in_flight <= packet.bytes && packet.sent_ns != m_acked_ns);
+        m_train_longest = m_cold_round ? m_train_longest : max_u64(m_train_longest, packet.train + packet.bytes);
         if (packet.train >= m_train_proven)
         {
             m_probe_sent = true;
@@ -157,9 +161,11 @@ public:
         m_restarted = false;
     }
 
-    void on_acked(const CongestionPacket& packet, u64 /*now_ns*/) noexcept override
+    void on_acked(const CongestionPacket& packet, u64 now_ns) noexcept override
     {
         m_restart_round = false; // the restarted flight's ACK clock runs again
+        m_cold_round = false;
+        m_acked_ns = now_ns;
         if (packet.space == QuicSpace::Application && m_rounds && packet.number >= m_window_end)
         {
             m_round_ended = true;
@@ -445,21 +451,23 @@ private:
         m_probe_out = false;
     }
 
-    // The train cap is what the path's losses teach (RFC 9002 section 7.7: a sender may burst past the initial
-    // window on a path it knows absorbs it). It starts at the initial window, which is proven, and grows only from a
-    // proven cap: it doubles, to 64 KiB, until a loss teaches it, then grows a datagram once kTrainHoldRounds rounds
-    // have gone clean at it. A growth is a probe of the path in two steps. First its depth, one train long: the first
-    // train at or past the proven bytes is the probe, every later one keeps to the proven bytes until the round after
-    // the probe's ends, and that round proves the probe's length unless it lost a packet past the initial window of
-    // its train. Then its drain: the next round sends every train at that length, judged by the round after. A loss
-    // past the initial window of a train that the probe sent (at or past the proven bytes, or any while the drain is
-    // judged) teaches the cap the bytes before it, or the length before the growth when the drain failed. As a PMTU
-    // probe's loss (RFC 9000 section 14.4), it and every such loss of a packet the probe's period sent before it
-    // start no congestion event, and the next growth waits twice as long, to kTrainHoldMaxRounds. Any other loss
-    // past the initial window's bytes shows the queue fuller than it was: the cap falls to the bytes before it, a
-    // congestion event follows as for any loss, the wait starts short again, and the cap doubles back to the length
-    // proven before as soon as a round proves it. A loss within the initial window's bytes, or before version 8,
-    // teaches nothing. True for a loss of the probe's.
+    // The train cap is what the path's losses teach (RFC 9002 section 7.7: a sender may burst past the initial window
+    // on a path it knows absorbs it). It starts at the initial window, which is proven, and grows only from a proven
+    // cap, and only after a round whose trains reached the proven length: an exact-timer host's ACK-clocked sends, a
+    // datagram or two an instant, prove nothing longer, and a cap no train of theirs reaches is only pacer credit above
+    // the rate, which in slow start overflows a queue shallower than it. It doubles, to 64 KiB, until a loss teaches
+    // it, then grows a datagram once kTrainHoldRounds such rounds have gone clean at it. A growth is a probe of the
+    // path in two steps. First its depth, one train long: the first train at or past the proven bytes is the probe,
+    // every later one keeps to the proven bytes until the round after the probe's ends, and that round proves the
+    // probe's length unless it lost a packet past the initial window of its train. Then its drain: the next round sends
+    // every train at that length, judged by the round after. A loss past the initial window of a train that the probe
+    // sent (at or past the proven bytes, or any while the drain is judged) teaches the cap the bytes before it, or the
+    // length before the growth when the drain failed. As a PMTU probe's loss (RFC 9000 section 14.4), it and every such
+    // loss of a packet the probe's period sent before it start no congestion event, and the next growth waits twice as
+    // long, to kTrainHoldMaxRounds. Any other loss past the initial window's bytes shows the queue fuller than it was:
+    // the cap falls to the bytes before it, a congestion event follows as for any loss, the wait starts short again,
+    // and the cap doubles back to the length proven before as soon as a round proves it. A loss within the initial
+    // window's bytes, or before version 8, teaches nothing. True for a loss of the probe's.
     [[nodiscard]] bool teach_train(const CongestionPacket& packet, u64 now_ns) noexcept
     {
         if (packet.train < m_initial || !m_trains)
@@ -498,10 +506,11 @@ private:
 
     // A round ended at `now_ns`. The trains of the round before, which this one acknowledged, prove their length
     // unless this round lost a packet past the initial window of its train; a probe among them is then decided, and a
-    // proven cap grows once its wait is over.
+    // proven cap that those trains reached grows once its wait is over.
     void grow_train(u64 now_ns) noexcept
     {
         const u64 longest = min_u64(m_train_longest_before, m_train_cap);
+        const u64 reached = max_u64(m_train_longest_before, m_train_longest); // the longest train of either round
         const bool probed = m_probe_sent_before;
         const bool lost = m_train_lost;
         m_train_longest_before = m_train_longest;
@@ -528,9 +537,11 @@ private:
             m_probe_since_ns = kNeverNs; // no probe is out: its period ends
         }
         if (m_train_drain != 0U || m_probe_out || m_probe_sent_before || m_train_proven + m_datagram <= m_train_cap ||
-            m_train_cap >= kSendQuantumMax)
+            m_train_cap >= kSendQuantumMax || reached + m_datagram <= m_train_proven)
         {
-            return; // a probe is out or being judged, the cap is unproven (a probe goes again), or it is whole
+            // A probe is out or being judged, the cap is unproven (a probe goes again), it is whole, or neither
+            // round's trains reached the proven length, so nothing longer is asked for.
+            return;
         }
         m_train_before = m_train_cap;
         if (m_train_cap < m_train_ceiling)
@@ -626,6 +637,8 @@ private:
     bool m_limited_before = false; // the round before
     bool m_restarted = false;      // the flight started from nothing in flight and nothing has held it back since
     bool m_restart_round = false;  // the flight started from nothing in flight and nothing of it is acknowledged yet
+    bool m_cold_round = false;     // so did it, at no acknowledgement's instant (on_sent)
+    u64 m_acked_ns = kNeverNs;     // the last acknowledgement's
 
     // The train cap (teach_train).
     bool m_trains = false; // kept at all
