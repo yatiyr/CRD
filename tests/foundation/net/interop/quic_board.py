@@ -16,7 +16,11 @@ The driver measures from outside: each process's user and system CPU time (os.wa
 workload runs at two sizes, and the cost is the slope between them, (cost at the larger minus cost at the smaller) over
 the difference in work, so process start, credential set-up and thread pools cancel. CPU is summed over both ends:
 on the loopback the receiver's kernel work is billed to whichever process runs, so one end's share is not comparable.
-The arms run interleaved, `rounds` times, and the board keeps each arm's best round and its median. Every run must
+Each end also reports its datagrams and the messages that carried them each way (a message is one datagram or one
+segmented or coalesced train, which the host's stack carries as one buffer): the bulk table gives them per MiB, from
+the same slope, so the kernel's share of a byte's cost reads as datagrams per message and datagrams per acknowledgement
+(the server sends almost nothing but ACKs). The arms run interleaved, `rounds` times, and the board keeps each arm's
+best round and its median. Every run must
 report every connection established, every byte delivered, and AES-128-GCM and version 1 on every connection; crd-net
 also reports its group (msquic's handshake information leaves the group out; its OpenSSL list puts secp256r1 first).
 """
@@ -33,6 +37,7 @@ SEED = '11' * 32
 RUN_SECONDS = 600
 GROUP = 'secp256r1'
 MIB = 1 << 20
+COUNTS = ('datagrams_sent', 'send_messages', 'datagrams_received', 'receive_messages')
 
 
 class Arm:
@@ -63,7 +68,8 @@ def cpu_of(usage):
 
 
 def run(arm, connections, parallel, size, window):
-    """One server and one client of `arm`: (client CPU, server CPU, client wall seconds)."""
+    """One server and one client of `arm`: (client CPU, server CPU, client wall seconds, counts), the counts by
+    (role, COUNTS name)."""
     with tempfile.TemporaryFile() as server_err, tempfile.TemporaryFile() as client_err:
         server = subprocess.Popen(arm.command('server', 0, connections, parallel, size, window),
                                   stdout=subprocess.PIPE, stderr=server_err, text=True)
@@ -93,7 +99,9 @@ def run(arm, connections, parallel, size, window):
             detail += f'{name}: {stream.read().decode(errors="replace").strip()} '
         reports = (report_of(client_out), report_of(server_out))
         check(arm, (client_status, server_status), reports, connections, size, detail)
-        return cpu_of(client_usage), cpu_of(server_usage), wall
+        counts = {(role, key): int(report[key]) for role, report in zip(('client', 'server'), reports)
+                  for key in COUNTS}
+        return cpu_of(client_usage), cpu_of(server_usage), wall, counts
 
 
 def check(arm, statuses, reports, connections, size, detail):
@@ -107,6 +115,9 @@ def check(arm, statuses, reports, connections, size, detail):
         for key, want in (('cipher', 'aes128'), ('version', '1'), ('group', GROUP if arm.group else 'unreported')):
             if report.get(key) != want:
                 raise AssertionError(f'{arm.name}: the {name} negotiated {key}={report.get(key)}, not {want}')
+        for key in COUNTS:
+            if not report.get(key, '').isdigit():
+                raise AssertionError(f'{arm.name}: the {name} reported {key}={report.get(key)}')
     if server.get('refused', '0') != '0':
         raise AssertionError(f'{arm.name}: the server refused {server["refused"]} connections')
     if client.get('bytes_sent') != str(size) or server.get('bytes_received') != str(size):
@@ -115,17 +126,18 @@ def check(arm, statuses, reports, connections, size, detail):
 
 
 def slope(arm, small, large, parallel, window, workload):
-    """Per unit of work between the two sizes: (CPU both ends, server CPU, client CPU, wall) in seconds."""
+    """Per unit of work between the two sizes: (CPU both ends, server CPU, client CPU, wall) in seconds, then the
+    counts per unit."""
     points = []
     for amount in (small, large):
         if workload == 'handshakes':
             points.append(run(arm, amount, parallel, 0, window))
         else:
             points.append(run(arm, 1, 1, amount, window))
-    (client0, server0, wall0), (client1, server1, wall1) = points
+    (client0, server0, wall0, counts0), (client1, server1, wall1, counts1) = points
     units = large - small
     return ((client1 + server1 - client0 - server0) / units, (server1 - server0) / units, (client1 - client0) / units,
-            (wall1 - wall0) / units)
+            (wall1 - wall0) / units, {key: (counts1[key] - counts0[key]) / units for key in counts1})
 
 
 def board(arms, rounds, sizes, parallel, window):
@@ -146,6 +158,11 @@ def rate(seconds, scale=1):
 def ratio(base, seconds):
     """An arm's rate over the first arm's."""
     return f'{base / seconds:.2f}' if base > 0 and seconds > 0 else 'n/a'
+
+
+def per(numerator, denominator):
+    """One count over another, n/a where the slope left the second empty."""
+    return f'{numerator / denominator:.1f}' if denominator > 0 else 'n/a'
 
 
 def table(arms, results, sizes):
@@ -172,6 +189,17 @@ def table(arms, results, sizes):
             median = statistics.median(r[0] for r in rows)
             lines.append(f'| {arm.name} | {rate(best[0], MIB)} | {rate(median, MIB)} | {rate(best[1], MIB)} | '
                          f'{rate(best[2], MIB)} | {rate(best[3], MIB)} | {ratio(best_base, best[0])} |')
+        lines += ['', '| arm (best round) | data datagrams per MiB | per send message | ACK datagrams per MiB | '
+                  'data per ACK | server datagrams per receive message | client datagrams per receive message |',
+                  '|---|---|---|---|---|---|---|']
+        for arm in arms:
+            counts = min(results[(arm.name, 'bytes')], key=lambda r: r[0])[4]
+            data, acks = counts[('client', 'datagrams_sent')] * MIB, counts[('server', 'datagrams_sent')] * MIB
+            lines.append(f'| {arm.name} | {data:,.0f} | '
+                         f'{per(counts[("client", "datagrams_sent")], counts[("client", "send_messages")])} | '
+                         f'{acks:,.0f} | {per(data, acks)} | '
+                         f'{per(counts[("server", "datagrams_received")], counts[("server", "receive_messages")])} | '
+                         f'{per(counts[("client", "datagrams_received")], counts[("client", "receive_messages")])} |')
     return '\n'.join(lines)
 
 

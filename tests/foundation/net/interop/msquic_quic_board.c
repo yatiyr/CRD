@@ -13,6 +13,10 @@
  *   - a stream's receive window is `window` (StreamRecvWindowDefault, which msquic rounds up to a power of two), the
  *     connection's 16 of them; msquic buffers what the application sends (SendBufferingEnabled, its default), and a
  *     client keeps SEND_DEPTH sends of CHUNK_BYTES each from one prefilled buffer outstanding.
+ *   - the datagram counts are msquic's own process-wide counters (QUIC_PARAM_GLOBAL_PERF_COUNTERS): UDP_SEND and
+ *     UDP_RECV are `datagrams_sent` and `datagrams_received`; UDP_SEND_CALLS (one per send it hands its datapath, a
+ *     segmented train or a datagram) is `send_messages`, and UDP_RECV_EVENTS (one per receive it delivers, which may
+ *     join several of the host's messages) is `receive_messages`.
  *
  * msquic runs its own worker threads and calls back on them, one connection's events in turn; the main thread starts a
  * client's first connections and waits until `connections` have shut down. */
@@ -409,8 +413,18 @@ static void report(board_t* board)
     const char* cipher = board->suite == QUIC_CIPHER_SUITE_TLS_AES_128_GCM_SHA256 ? "aes128" : "other";
     printf("group=unreported\ncipher=%s\nversion=%s\n", board->mixed ? "mixed" : cipher,
            board->mixed ? "mixed" : (board->version == 1U ? "1" : "other"));
-    fflush(stdout);
     pthread_mutex_unlock(&board->lock);
+    uint64_t counters[QUIC_PERF_COUNTER_MAX];
+    uint32_t size = sizeof(counters);
+    if (QUIC_SUCCEEDED(board->api->GetParam(NULL, QUIC_PARAM_GLOBAL_PERF_COUNTERS, &size, counters)))
+    {
+        printf("datagrams_sent=%llu\nsend_messages=%llu\ndatagrams_received=%llu\nreceive_messages=%llu\n",
+               (unsigned long long)counters[QUIC_PERF_COUNTER_UDP_SEND],
+               (unsigned long long)counters[QUIC_PERF_COUNTER_UDP_SEND_CALLS],
+               (unsigned long long)counters[QUIC_PERF_COUNTER_UDP_RECV],
+               (unsigned long long)counters[QUIC_PERF_COUNTER_UDP_RECV_EVENTS]);
+    }
+    fflush(stdout);
 }
 
 static int usage(void)

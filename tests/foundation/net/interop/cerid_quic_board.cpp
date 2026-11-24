@@ -20,8 +20,11 @@
 //
 // The report, one `name=value` per line on standard output once the run has ended: `connections` that closed,
 // `established` among them, `bytes_received` and `bytes_sent` on the streams, and what every established connection
-// negotiated (`group`, `cipher`, `version`; `mixed` when two differed), and a server's Initials it `refused`. Why a
-// connection ended unestablished goes to standard error. The CPU time and memory are the driver's to measure.
+// negotiated (`group`, `cipher`, `version`; `mixed` when two differed), a server's Initials it `refused`, and what
+// the socket handed the host and took from it: `datagrams_sent` and `send_messages`, `datagrams_received` and
+// `receive_messages`, a message being one datagram or one segmented or coalesced train (one buffer the host's stack
+// carries whole on Linux). Why a connection ended unestablished goes to standard error. The CPU time and memory are
+// the driver's to measure.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -283,6 +286,20 @@ int drive(const HostClock& clock, const SocketSet& sockets, IoLoop& loop, const 
     return 0;
 }
 
+// The socket's datagrams and messages each way: a train counts as one message of its datagrams.
+void report_datagrams(const UdpSocket& socket, const IoLoop& loop) noexcept
+{
+    const OffloadCounters& offloads = socket.offload_counters();
+    const u64 sent = socket.sends_taken();
+    const u64 received = loop.counters().received;
+    const u64 sent_messages = sent - offloads.train_datagrams_sent + offloads.trains_sent;
+    const u64 received_messages = received - offloads.train_datagrams_received + offloads.trains_received;
+    std::printf("datagrams_sent=%llu\nsend_messages=%llu\ndatagrams_received=%llu\nreceive_messages=%llu\n",
+                static_cast<unsigned long long>(sent), static_cast<unsigned long long>(sent_messages),
+                static_cast<unsigned long long>(received), static_cast<unsigned long long>(received_messages));
+    std::fflush(stdout);
+}
+
 bool open_socket(const Options& options, u64 port, UdpSocket& socket) noexcept
 {
     UdpOptions udp;
@@ -335,7 +352,7 @@ int run_server(crd::memory::IAllocator& allocator, const Options& options, const
     const int result = drive(clock, sockets, loop, board, [](u64) { return true; });
     board.report();
     std::printf("refused=%llu\n", static_cast<unsigned long long>(server.counters().refused));
-    std::fflush(stdout);
+    report_datagrams(socket, loop);
     return result;
 }
 
@@ -386,6 +403,7 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
     };
     const int result = drive(clock, sockets, loop, board, start);
     board.report();
+    report_datagrams(socket, loop);
     return result;
 }
 
