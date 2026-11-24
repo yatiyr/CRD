@@ -3,7 +3,7 @@
 
 Each arm is one implementation's board program as server and client (cerid_quic_board.cpp, msquic_quic_board.c), in
 their own processes over real UDP, with equal settings: QUIC v1, AES-128-GCM, secp256r1, the server's Ed25519
-certificate pinned by the client, CUBIC, one stream's receive window `window` and the connection's 16 of them. Two
+certificate pinned by the client, CUBIC, one stream's receive window `window` and the connection's 16 of them. Three
 workloads:
 
   handshakes  a client runs `connections` connections, `parallel` under way at once, each writing an empty stream
@@ -11,6 +11,11 @@ workloads:
               ends' handshake, which a close at the client's own completion would not wait for
   bytes       one connection, the client writes `bytes` bytes and a FIN on one stream from a prefilled buffer, the
               server counts and drops them and answers with its FIN
+  memory      the handshakes' connections, `parallel` started at once, but the client holds each open, idle, once its
+              FIN came, and closes them all once every one's has (--hold): every end must report that all
+              `connections` were live at once (`peak_live`); the cost is each end's peak resident set (os.wait4's
+              ru_maxrss) per held connection, an idle established one with its stream's buffers as its exchange left
+              them
 
 The driver measures from outside: each process's user and system CPU time (os.wait4) and the client's wall time. Each
 workload runs at two sizes, and the cost is the slope between them, (cost at the larger minus cost at the smaller) over
@@ -27,6 +32,7 @@ the board keeps each arm's best round and its median. Every run must
 report every connection established, every byte delivered, and AES-128-GCM and version 1 on every connection; crd-net
 also reports its group (msquic's handshake information leaves the group out; its OpenSSL list puts secp256r1 first).
 """
+WORKLOADS = ('handshakes', 'bytes', 'memory')
 import argparse
 import os
 import statistics
@@ -51,11 +57,11 @@ class Arm:
         self.offload = offload  # None: the program has no switch
         self.group = group      # the program takes --group and reports it
 
-    def command(self, role, port, connections, parallel, size, window):
+    def command(self, role, port, connections, parallel, size, window, hold):
         command = [self.program, '--role', role, '--port', str(port), '--seed', SEED, '--connections',
                    str(connections), '--window', str(window)]
         if role == 'client':
-            command += ['--parallel', str(parallel), '--bytes', str(size)]
+            command += ['--parallel', str(parallel), '--bytes', str(size), '--hold', '1' if hold else '0']
         if self.group:
             command += ['--group', GROUP]
         if self.offload is not None:
@@ -71,11 +77,11 @@ def cpu_of(usage):
     return usage.ru_utime + usage.ru_stime
 
 
-def run(arm, connections, parallel, size, window):
+def run(arm, connections, parallel, size, window, hold=False):
     """One server and one client of `arm`: (client CPU, server CPU, client wall seconds, counts), the counts by
-    (role, COUNTS name)."""
+    (role, COUNTS or WAITS name, or `peak_kib`: the end's peak resident set in KiB)."""
     with tempfile.TemporaryFile() as server_err, tempfile.TemporaryFile() as client_err:
-        server = subprocess.Popen(arm.command('server', 0, connections, parallel, size, window),
+        server = subprocess.Popen(arm.command('server', 0, connections, parallel, size, window, hold),
                                   stdout=subprocess.PIPE, stderr=server_err, text=True)
         client = None
         watchdog = threading.Timer(RUN_SECONDS, lambda: [p.kill() for p in (server, client) if p is not None])
@@ -86,7 +92,7 @@ def run(arm, connections, parallel, size, window):
                 raise AssertionError(f'{arm.name}: the server printed {first!r}')
             started = time.perf_counter()
             client = subprocess.Popen(arm.command('client', int(first[len('port='):]), connections, parallel, size,
-                                                  window), stdout=subprocess.PIPE, stderr=client_err, text=True)
+                                                  window, hold), stdout=subprocess.PIPE, stderr=client_err, text=True)
             client_out = client.stdout.read()
             _, client_status, client_usage = os.wait4(client.pid, 0)
             wall = time.perf_counter() - started
@@ -102,13 +108,15 @@ def run(arm, connections, parallel, size, window):
             stream.seek(0)
             detail += f'{name}: {stream.read().decode(errors="replace").strip()} '
         reports = (report_of(client_out), report_of(server_out))
-        check(arm, (client_status, server_status), reports, connections, size, detail)
+        check(arm, (client_status, server_status), reports, connections, size, hold, detail)
         counts = {(role, key): int(report.get(key, 0)) for role, report in zip(('client', 'server'), reports)
                   for key in COUNTS + WAITS}
+        counts[('client', 'peak_kib')] = client_usage.ru_maxrss  # KiB on Linux
+        counts[('server', 'peak_kib')] = server_usage.ru_maxrss
         return cpu_of(client_usage), cpu_of(server_usage), wall, counts
 
 
-def check(arm, statuses, reports, connections, size, detail):
+def check(arm, statuses, reports, connections, size, hold, detail):
     client, server = reports
     if any(os.waitstatus_to_exitcode(status) != 0 for status in statuses):
         raise AssertionError(f'{arm.name}: an end failed: {reports} {detail}')
@@ -122,6 +130,9 @@ def check(arm, statuses, reports, connections, size, detail):
         for key in COUNTS + (WAITS if arm.offload is not None else ()):
             if not report.get(key, '').isdigit():
                 raise AssertionError(f'{arm.name}: the {name} reported {key}={report.get(key)}')
+        if hold and report.get('peak_live') != str(connections):
+            raise AssertionError(f'{arm.name}: the {name} held {report.get("peak_live")} connections at once, not '
+                                 f'{connections}: {detail}')
     if server.get('refused', '0') != '0':
         raise AssertionError(f'{arm.name}: the server refused {server["refused"]} connections')
     if client.get('bytes_sent') != str(size) or server.get('bytes_received') != str(size):
@@ -130,18 +141,19 @@ def check(arm, statuses, reports, connections, size, detail):
 
 
 def slope(arm, small, large, parallel, window, workload):
-    """Per unit of work between the two sizes: (CPU both ends, server CPU, client CPU, wall) in seconds, then the
-    counts per unit."""
+    """Per unit of work between the two sizes: (CPU both ends, server CPU, client CPU, wall) in seconds, the counts
+    per unit, then each end's peak resident set at the larger size in KiB (server, client)."""
     points = []
     for amount in (small, large):
-        if workload == 'handshakes':
-            points.append(run(arm, amount, parallel, 0, window))
-        else:
+        if workload == 'bytes':
             points.append(run(arm, 1, 1, amount, window))
+        else:
+            points.append(run(arm, amount, parallel, 0, window, hold=workload == 'memory'))
     (client0, server0, wall0, counts0), (client1, server1, wall1, counts1) = points
     units = large - small
     return ((client1 + server1 - client0 - server0) / units, (server1 - server0) / units, (client1 - client0) / units,
-            (wall1 - wall0) / units, {key: (counts1[key] - counts0[key]) / units for key in counts1})
+            (wall1 - wall0) / units, {key: (counts1[key] - counts0[key]) / units for key in counts1},
+            (counts1[('server', 'peak_kib')], counts1[('client', 'peak_kib')]))
 
 
 def board(arms, rounds, sizes, parallel, window):
@@ -162,6 +174,11 @@ def rate(seconds, scale=1):
 def ratio(base, seconds):
     """An arm's rate over the first arm's."""
     return f'{base / seconds:.2f}' if base > 0 and seconds > 0 else 'n/a'
+
+
+def kib(value):
+    """KiB, n/a where the noise made a slope empty or negative."""
+    return f'{value:,.1f}' if value > 0 else 'n/a'
 
 
 def per(numerator, denominator):
@@ -216,7 +233,25 @@ def table(arms, results, sizes):
                           f'{counts[(role, "wait_asked_ns")] * MIB / 1000:,.0f}',
                           f'{counts[(role, "wait_ns")] * MIB / 1000:,.0f}']
             lines.append(f'| {arm.name} | ' + ' | '.join(cells) + ' |')
-    return '\n'.join(lines)
+        lines.append('')
+    if 'memory' in sizes:
+        held = sizes['memory'][1]
+        lines += [f'| arm | KiB per held connection (both ends) | median | server | client | server peak MiB at '
+                  f'{held:,} | client peak MiB at {held:,} | vs {base} |', '|---|---|---|---|---|---|---|---|']
+
+        def both(row):
+            return row[4][('server', 'peak_kib')] + row[4][('client', 'peak_kib')]
+
+        best_base = min(both(r) for r in results[(base, 'memory')])
+        for arm in arms:
+            rows = results[(arm.name, 'memory')]
+            best = min(rows, key=both)
+            median = statistics.median(both(r) for r in rows)
+            counts = best[4]
+            lines.append(f'| {arm.name} | {kib(both(best))} | {kib(median)} | {kib(counts[("server", "peak_kib")])} | '
+                         f'{kib(counts[("client", "peak_kib")])} | {best[5][0] / 1024:,.1f} | {best[5][1] / 1024:,.1f} '
+                         f'| {ratio(both(best), best_base)} |')
+    return '\n'.join(lines).rstrip()
 
 
 def pair(text):
@@ -231,24 +266,25 @@ def main():
     parser.add_argument('--cerid', required=True, help='crd-quic-board')
     parser.add_argument('--msquic', help='crd-msquic-quic-board')
     parser.add_argument('--baseline', help="another build's crd-quic-board, run interleaved as its own offload arm")
-    parser.add_argument('--workload', choices=('both', 'handshakes', 'bytes'), default='both')
+    parser.add_argument('--workload', choices=('all',) + WORKLOADS, default='all')
     parser.add_argument('--rounds', type=int, default=5)
     parser.add_argument('--handshakes', type=pair, default=(200, 2000), help='connections at the two sizes')
     parser.add_argument('--bytes', type=pair, default=(64 * MIB, 1024 * MIB), help='bytes at the two sizes')
+    parser.add_argument('--memory', type=pair, default=(200, 2000), help='held connections at the two sizes')
     parser.add_argument('--parallel', type=int, default=16, help='connections under way at once')
     parser.add_argument('--window', type=int, default=MIB, help="a stream's receive window")
     parser.add_argument('--check', action='store_true',
                         help='one short round: every arm completes with equal parameters (the CTest)')
     arguments = parser.parse_args()
     if arguments.check:
-        arguments.rounds, arguments.handshakes, arguments.bytes = 1, (8, 24), (MIB, 4 * MIB)
+        arguments.rounds, arguments.handshakes, arguments.bytes, arguments.memory = 1, (8, 24), (MIB, 4 * MIB), (8, 24)
     arms = [Arm('crd-net', arguments.cerid, offload=True), Arm('crd-net, no offload', arguments.cerid, offload=False)]
     if arguments.baseline:
         arms.insert(1, Arm('crd-net baseline', arguments.baseline, offload=True))
     if arguments.msquic:
         arms.append(Arm('msquic', arguments.msquic, group=False))
-    sizes = {workload: getattr(arguments, workload) for workload in ('handshakes', 'bytes')
-             if arguments.workload in ('both', workload)}
+    sizes = {workload: getattr(arguments, workload) for workload in WORKLOADS
+             if arguments.workload in ('all', workload)}
     try:
         results = board(arms, arguments.rounds, sizes, arguments.parallel, arguments.window)
     except AssertionError as error:

@@ -2,7 +2,7 @@
 // on the loopback, each against itself, the workloads every board peer runs alike (msquic_quic_board.c is msquic's).
 //
 // Usage: crd-quic-board --role client|server --port N --seed HEX --group NAME --connections N [--parallel N]
-//                       [--bytes N] [--window N] [--offload 0|1]
+//                       [--bytes N] [--window N] [--offload 0|1] [--hold 0|1]
 //
 //   port         a server's to bind on 127.0.0.1 (0: any, printed as `port=N`), a client's to reach
 //   seed         the 32-byte Ed25519 private key of the server's self-signed credential; a client pins its public key
@@ -17,10 +17,13 @@
 //   window       each stream's receive window and send buffer; the connection's window is 16 of them
 //   offload      1 (the default): the sockets hand the host segmented trains and take coalesced ones (GSO and GRO
 //                where the host has them); 0: one datagram a call each way, as on a NIC without either
+//   hold         1: a client keeps each connection open, idle, once its work is done, and closes them all once every
+//                one's is, so all `connections` are live at once (the memory workload); a server needs no switch
 //
 // The report, one `name=value` per line on standard output once the run has ended: `connections` that closed,
 // `established` among them, `bytes_received` and `bytes_sent` on the streams, and what every established connection
-// negotiated (`group`, `cipher`, `version`; `mixed` when two differed), a server's Initials it `refused`, and what
+// negotiated (`group`, `cipher`, `version`; `mixed` when two differed), `peak_live`, the most connections live at
+// once (a client's started, a server's accepted, and not yet closed), a server's Initials it `refused`, and what
 // the socket handed the host and took from it: `datagrams_sent` and `send_messages`, `datagrams_received` and
 // `receive_messages`, a message being one datagram or one segmented or coalesced train (one buffer the host's stack
 // carries whole on Linux), and the loop's `waits` for its next event, the `wait_timeouts` among them that no datagram
@@ -80,15 +83,18 @@ struct Options
     u64 bytes = 0U;
     u64 window = 1U << 20U;
     bool offload = true;
+    bool hold = false;
 };
 
 // One live connection's place in the work, by its slot.
 struct Work
 {
+    QuicHandle handle;
     bool opened = false; // a client's stream is open
     bool fin_read = false;
     bool fin_sent = false;
-    bool closing = false; // done with its work
+    bool done = false; // its work is done: closing, or held open
+    bool closing = false;
     u64 sent = 0U;
 };
 
@@ -97,7 +103,7 @@ class Board final : public QuicServerEvents, public QuicClientEvents
 public:
     explicit Board(const Options& options) noexcept : m_options(options) {}
 
-    void on_accept(QuicHandle handle, QuicConnection&, const Endpoint&) noexcept override { m_work[handle.slot] = {}; }
+    void on_accept(QuicHandle handle, QuicConnection&, const Endpoint&) noexcept override { open(handle); }
     void on_restart(QuicHandle, QuicConnection&) noexcept override {}
 
     void on_service(QuicHandle handle, QuicConnection& connection, u64 now_ns) noexcept override
@@ -119,19 +125,31 @@ public:
         }
         if (m_options.client && work.fin_read)
         {
-            close(work, connection, now_ns);
+            finish(work);
+            if (!m_options.hold || m_released)
+            {
+                work.closing = true;
+                connection.close(0U, {}, now_ns);
+            }
         }
     }
 
     void on_closed(QuicHandle handle, const QuicConnection& connection) noexcept override
     {
         count(connection);
-        m_finished += m_work[handle.slot].closing ? 0U : 1U;
+        finish(m_work[handle.slot]);
         ++m_closed;
         m_work[handle.slot] = {};
     }
 
     [[nodiscard]] bool done() const noexcept { return m_closed >= m_options.connections; }
+    // Whether the loop has work before its next event: a connection to start, or a holding client's to close.
+    [[nodiscard]] bool pending() const noexcept { return may_start() || release_due(); }
+    // A holding client's connections have all done their work and stay open.
+    [[nodiscard]] bool release_due() const noexcept
+    {
+        return m_options.hold && !m_released && m_finished >= m_options.connections;
+    }
     // Whether a client starts another connection now: `parallel` are under way at most, closing ones (which hold their
     // slots for three PTOs, RFC 9000 section 10.2) not counted.
     [[nodiscard]] bool may_start() const noexcept
@@ -141,8 +159,20 @@ public:
     }
     void start(QuicHandle handle) noexcept
     {
-        m_work[handle.slot] = {};
         ++m_started;
+        open(handle);
+    }
+    // A holding client closes its connections: each is served in the host's next turn, and closes there.
+    void release(QuicHost& host) noexcept
+    {
+        m_released = true;
+        for (const Work& work : m_work)
+        {
+            if (work.done && !work.closing)
+            {
+                host.wake(work.handle);
+            }
+        }
     }
 
     void report() const noexcept
@@ -150,8 +180,10 @@ public:
         std::printf("connections=%llu\nestablished=%llu\nbytes_received=%llu\nbytes_sent=%llu\n",
                     static_cast<unsigned long long>(m_closed), static_cast<unsigned long long>(m_established),
                     static_cast<unsigned long long>(m_received), static_cast<unsigned long long>(m_sent));
-        std::printf("group=%s\ncipher=%s\nversion=%s\n", m_mixed ? "mixed" : group_name(m_group),
-                    m_mixed ? "mixed" : cipher_name(m_cipher), m_mixed ? "mixed" : (m_version == 1U ? "1" : "other"));
+        const char* const version = m_version == 1U ? "1" : "other";
+        std::printf("group=%s\ncipher=%s\nversion=%s\npeak_live=%llu\n", m_mixed ? "mixed" : group_name(m_group),
+                    m_mixed ? "mixed" : cipher_name(m_cipher), m_mixed ? "mixed" : version,
+                    static_cast<unsigned long long>(m_peak_live));
         std::fflush(stdout);
     }
 
@@ -186,11 +218,21 @@ private:
         ++m_established;
     }
 
-    void close(Work& work, QuicConnection& connection, u64 now_ns) noexcept
+    // A connection a client started or a server accepted, live until on_closed.
+    void open(QuicHandle handle) noexcept
     {
-        work.closing = true;
-        ++m_finished;
-        connection.close(0U, {}, now_ns);
+        m_work[handle.slot] = {};
+        m_work[handle.slot].handle = handle;
+        ++m_opened;
+        const u64 live = m_opened - m_closed;
+        m_peak_live = live > m_peak_live ? live : m_peak_live;
+    }
+
+    // Its place among the `parallel` under way is free.
+    void finish(Work& work) noexcept
+    {
+        m_finished += work.done ? 0U : 1U;
+        work.done = true;
     }
 
     // Reads stream 0 to its end, counting; a client writes its bytes and FIN, a server its FIN once the client's came.
@@ -231,6 +273,8 @@ private:
     Options m_options;
     Work m_work[kSlots] = {};
     u64 m_started = 0U;
+    u64 m_opened = 0U;
+    u64 m_peak_live = 0U;
     u64 m_finished = 0U;
     u64 m_closed = 0U;
     u64 m_established = 0U;
@@ -240,6 +284,7 @@ private:
     AlgorithmId m_cipher{};
     u32 m_version = 0U;
     bool m_mixed = false;
+    bool m_released = false; // a holding client closed its connections
 };
 
 QuicConnectionConfig connection_config(const Options& options, const TlsContext& context)
@@ -269,8 +314,8 @@ struct Waits
     u64 taken_ns = 0U;
 };
 
-// Turns the loop until the board is done, starting a client's connections as earlier ones finish: a turn that freed a
-// place starts the next connection before any wait.
+// Turns the loop until the board is done, starting a client's connections as earlier ones finish (and closing a holding
+// client's once all have): a turn that freed a place starts the next connection before any wait.
 template <typename Start>
 int drive(const HostClock& clock, const SocketSet& sockets, IoLoop& loop, const Board& board, const Start& start,
           Waits& waits)
@@ -289,7 +334,7 @@ int drive(const HostClock& clock, const SocketSet& sockets, IoLoop& loop, const 
             std::fputs("crd-quic-board: the run outlasted its deadline\n", stderr);
             return 1;
         }
-        if (next > now && !board.may_start())
+        if (next > now && !board.pending())
         {
             const u64 asked = next - now < kMaxWaitNs ? next - now : kMaxWaitNs;
             const bool readable = sockets.wait_readable(asked);
@@ -419,6 +464,10 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
             }
             board.start(handle);
         }
+        if (board.release_due())
+        {
+            board.release(client);
+        }
         return true;
     };
     Waits waits;
@@ -431,7 +480,7 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
 int usage()
 {
     std::fputs("usage: crd-quic-board --role client|server --port N --seed HEX --group NAME --connections N "
-               "[--parallel N] [--bytes N] [--window N] [--offload 0|1]\n",
+               "[--parallel N] [--bytes N] [--window N] [--offload 0|1] [--hold 0|1]\n",
                stderr);
     return 2;
 }
@@ -485,14 +534,18 @@ bool parse(int argc, char** argv, Options& options)
         {
             options.offload = number != 0U;
         }
+        else if (std::strcmp(name, "--hold") == 0)
+        {
+            options.hold = number != 0U;
+        }
         else
         {
             return false;
         }
     }
     return argc % 2 == 1 && role && seed && options.port <= 65535U && options.connections != 0U &&
-           options.parallel != 0U && options.parallel <= kSlots && options.window >= 4096U &&
-           options.window <= (u64{1} << 26U) && (!options.client || options.port != 0U);
+           options.parallel != 0U && options.parallel <= kSlots && (!options.hold || options.connections <= kSlots) &&
+           options.window >= 4096U && options.window <= (u64{1} << 26U) && (!options.client || options.port != 0U);
 }
 } // namespace
 
