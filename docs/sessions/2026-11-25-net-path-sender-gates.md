@@ -22,10 +22,11 @@ linux-gcc-release with link-time optimisation and linux-gcc-debug).
 
 ## Evidence
 
-- Debug suite, every case in its own process (seed 1), HEAD run twice against the change: 1,202 cases with equal
-  assertion counts, the LEO case's 151,986,309 among them. Four cases differ, and each also differs between HEAD's
-  two runs or across runs: QMux seeded stalls, the 0-RTT first service, 0-RTT before a Retry, and the ticket cache
-  (519,402 to 519,404). The whole suite passes: 903,454,817 assertions, 8 skips (Registered I/O, Windows only).
+- Debug suite, every case in its own process (seed 1), HEAD run twice against the change: 1,198 of 1,202 cases
+  have equal assertion counts, the LEO case's 151,986,309 among them. The other four also vary from run to run on
+  HEAD: QMux seeded stalls, the 0-RTT first service and 0-RTT before a Retry differ between HEAD's two runs, and the
+  ticket cache gave 519,402 to 519,419 over five runs of each build. The whole suite passes: 903,454,817
+  assertions, 8 skips (Registered I/O, Windows only).
   The release crd-net-tests LTO link is clean.
 - The board, interleaved against HEAD's build on a busy host, five rounds, best (median):
   - 1 MiB windows: 513 (503) against 490 (480) MiB per CPU-second, +4.7%; msquic 733 (666), now 1.43 times.
@@ -38,7 +39,7 @@ linux-gcc-release with link-time optimisation and linux-gcc-debug).
 One entropy draw a packet, with bit 0 for the grease and six bits above it for the skip, cut a SipHash call. It
 changed the random stream, and the LEO case failed for CUBIC: aware made 3 reductions after handovers against
 blind's 2, with 1 undone, and was 10 ms slower. This is the same aware-against-blind comparison the ACK rule broke
-last batch. The patch is kept outside the tree.
+last batch. The patch is kept outside the tree, in the WSL home's experiment patches (`one-draw.patch`).
 
 ## Next
 
