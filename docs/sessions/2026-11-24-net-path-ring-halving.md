@@ -27,10 +27,12 @@ CI first: nothing to fix (no run finished since 04440292; host-check 45296064704
   1024 and 32768 buffers all lend whole.
 - Teeth: the Linux predicate forced false fails the 256 MiB section; the Windows reopen forced plain fails it (3
   assertions).
-- linux-gcc-debug and linux-gcc-asan `[udp]` (34 cases), win-debug `[udp]` (33), the 19 `crd-no-*`/`crd-check*`
-  guards; pinned clang-tidy 22.1.8 clean on the three changed sources; clang-format on added lines; braces pass.
+- linux-gcc-debug, linux-gcc-asan and linux-clang-tsan `[udp]` (34 cases), win-debug and win-asan `[udp]` (33),
+  the limit sections included on every sanitizer, the 19 `crd-no-*`/`crd-check*` guards; pinned clang-tidy 22.1.8 clean on the three changed sources; clang-format on added lines; braces pass.
 
 ## Next
 
 - The bulk gap's kernel half: count datagrams per send and per receive call and the receiver's ACK rate.
-- The Azure refusal's step and errno, from the next hosted linux-gcc-asan run that refuses a ring.
+- The Azure refusal's cause is still unknown. A full lane prints no passing output, and with halving that case
+  now passes, so its step, errno and granted count come from the `udp-ring` leg (`-s`, tallied): run 45299047960
+  on 6983e336 is the first, and an Azure host there is the reading.

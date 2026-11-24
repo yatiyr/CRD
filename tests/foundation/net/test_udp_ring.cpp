@@ -256,7 +256,7 @@ bool resource_refusal(const SocketFeatures& features)
     const RingRefusal step = features.ring_refusal;
     const int code = features.ring_error;
     return (step == RingRefusal::Memory || step == RingRefusal::Setup || step == RingRefusal::Register) &&
-           (code == ENOMEM || code == EMFILE || code == ENFILE || code == EAGAIN);
+           (code == ENOMEM || code == ENOBUFS || code == EMFILE || code == ENFILE || code == EAGAIN);
 }
 
 // The ring a socket that asked for `asked` buffers holds: all of them with no refusal, or after a resource refusal
