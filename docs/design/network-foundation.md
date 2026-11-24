@@ -461,7 +461,9 @@ placement table restated, every refusal and check path), eleven source mutations
   opens with the previous key, else with the next. An update is initiated only after confirmation, with a packet of
   the current phase acknowledged, the previous key gone and the peer's answer seen; `seal()` starts one by itself at
   three quarters of the key's limit or of the transport's own interval, and a key that reaches its limit unupdated
-  refuses (AEAD_LIMIT_REACHED). A peer's update is followed by the send key; a second one before this end sent an
+  refuses (AEAD_LIMIT_REACHED). One send key advances in place (`QuicPacketKey::update` of itself: a sender never
+  needs an older one), and a provider failure in that step leaves none and closes (INTERNAL_ERROR, `Provider`). A
+  peer's update is followed by the send key; a second one before this end sent an
   acknowledgement in the new phase, newer keys on a lower packet number than older keys protected, and a current
   packet below an older key's largest are KEY_UPDATE_ERROR. An older key above the newer key's first packet is tried
   as the next phase's and never opens, so it is dropped rather than detected.

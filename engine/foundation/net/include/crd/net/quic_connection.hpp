@@ -591,9 +591,9 @@ public:
     [[nodiscard]] QuicStreamSet& streams() noexcept { return m_streams; }
     [[nodiscard]] const QuicStreamSet& streams() const noexcept { return m_streams; }
     // What the connection has taken from its allocator after construction: its streams' buffers (QuicStreamSet::
-    // buffer_allocations), its CRYPTO levels', its growing tables' (table_bytes), its handshake levels' keys
-    // (QuicPacketProtection::allocations) and the controllers' and learners' storage a live set_congestion() or
-    // set_handover_learning() took (QuicPathControl::allocations). Nothing else allocates then.
+    // buffer_allocations), its CRYPTO levels', a Retry's and NEW_TOKEN's token, its growing tables' (table_bytes),
+    // its handshake levels' keys (QuicPacketProtection::allocations) and the controllers' and learners' storage a live
+    // set_congestion() or set_handover_learning() took (QuicPathControl::allocations). Nothing else allocates then.
     [[nodiscard]] u32 buffer_allocations() const noexcept;
     // The bytes the stream and CRYPTO buffers hold now, their bitmaps included.
     [[nodiscard]] usize buffer_bytes() const noexcept;
@@ -972,6 +972,9 @@ private:
     // back to the allocator.
     void read_held(u64 now_ns) noexcept;
     void release_held() noexcept;
+    // Replaces a kept token (`kept`, `kept_bytes`) with a copy of `token` in storage of exactly its size, none for an
+    // empty one; false, the kept one as it was, when the allocator refuses.
+    [[nodiscard]] bool keep_token(u8*& kept, usize& kept_bytes, cont::ConstSpan<u8> token) noexcept;
     [[nodiscard]] bool new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept;
     [[nodiscard]] bool retire_local(u64 path_id, u64 sequence, u64 now_ns) noexcept;
     // An ACK frame, or a PATH_ACK frame of path ID 0's, which acknowledges the same space (RFC 10069 section 2.3).
@@ -1213,6 +1216,7 @@ private:
     Events m_events;
     HelloAnswer m_hello;
     u32 m_crypto_allocations = 0U; // the CRYPTO levels' blocks taken
+    u32 m_token_allocations = 0U;  // the tokens' storage taken after construction
     Level m_levels[kQuicSpaces];
     crypto::QuicHandshake m_handshake;
     QuicPacketProtection m_protection;
@@ -1220,7 +1224,7 @@ private:
     u64 m_entropy_counter = 0U;
     u32 m_versions[kQuicMaxAvailableVersions] = {};
     usize m_version_count = 0U;
-    u8 m_token[kQuicMaxCarriedTokenBytes] = {};
+    u8* m_token = nullptr; // a client's Initial token (its configuration's, then a Retry's) until Initial is gone
     usize m_token_bytes = 0U;
     u8* m_early_context = nullptr; // a server's with early data: kQuicEarlyParameterBytes, then the application's part
     usize m_early_context_bytes = 0U;
@@ -1273,7 +1277,7 @@ private:
     QuicCids m_cids;                // both ends' connection IDs, path ID 0's until multipath opens others
     QuicCidRef m_packet_local;      // this side's ID the packet being read was sent to (none: not found())
     usize m_receive_slot = 0U;      // the path slot of the 1-RTT packet being read: its ID's path ID's (0 otherwise)
-    u8 m_new_token[kQuicMaxCarriedTokenBytes] = {};
+    u8* m_new_token = nullptr; // new_token()'s
     usize m_new_token_bytes = 0U;
     QuicPath m_new_token_path; // the path whose address the token is for
     u64 m_new_token_generation = 0U;

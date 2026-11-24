@@ -153,12 +153,18 @@ TEST_CASE("QUIC: the ChaCha20-Poly1305 short header packet and its key update", 
         const u8 ping = 0x01U;
         protect_and_read_back(sample.version, AlgorithmId::Chacha20Poly1305, secret, header, ConstSpan<u8>(&ping, 1U),
                               1U, kChachaPacketNumber, from_hex(sample.chacha_packet));
-        // The next key phase seals exactly as a key made from RFC's "ku" secret, and differs from the first.
+        // The next key phase seals exactly as a key made from RFC's "ku" secret, and differs from the first; a key
+        // advanced in place (a sender's one key) is that same key.
         QuicPacketKey first;
         QuicPacketKey next;
         QuicPacketKey expected;
+        QuicPacketKey advanced;
         REQUIRE(first.init(sample.version, AlgorithmId::Chacha20Poly1305, secret) == CryptoError::None);
         REQUIRE(next.update(first) == CryptoError::None);
+        REQUIRE(advanced.init(sample.version, AlgorithmId::Chacha20Poly1305, secret) == CryptoError::None);
+        REQUIRE(advanced.update(advanced) == CryptoError::None);
+        CHECK(advanced.version() == sample.version);
+        CHECK(advanced.algorithm() == AlgorithmId::Chacha20Poly1305);
         REQUIRE(expected.init(sample.version, AlgorithmId::Chacha20Poly1305, from_hex(sample.chacha_next_secret)) ==
                 CryptoError::None);
         CHECK(next.version() == sample.version);
@@ -166,10 +172,13 @@ TEST_CASE("QUIC: the ChaCha20-Poly1305 short header packet and its key update", 
         Bytes a = concat(header, ConstSpan<u8>(&ping, 1U), 21U);
         Bytes b = a;
         Bytes c = a;
+        Bytes d = a;
         REQUIRE(next.seal(kChachaPacketNumber, a, 4U) == CryptoError::None);
         REQUIRE(expected.seal(kChachaPacketNumber, b, 4U) == CryptoError::None);
         REQUIRE(first.seal(kChachaPacketNumber, c, 4U) == CryptoError::None);
+        REQUIRE(advanced.seal(kChachaPacketNumber, d, 4U) == CryptoError::None);
         CHECK(equal(a, b));
+        CHECK(equal(d, b));
         CHECK_FALSE(equal(a, c));
         // A packet of the old phase does not open under the new one: the receiver keeps both while packets reorder.
         CHECK(next.open(kChachaPacketNumber, c, 4U) == CryptoError::Forged);
@@ -401,12 +410,12 @@ TEST_CASE("QUIC: packet keys refuse what is outside their contract", "[crypto][n
     CHECK(hp.mask(ConstSpan<u8>(packet, 15U), mask) == CryptoError::BadLength);
     CHECK(hp.mask(ConstSpan<u8>(packet, 16U), Span<u8>(mask, 4U)) == CryptoError::BadLength);
 
-    // Updates: from nothing, onto itself.
+    // Updates: from nothing (in place too, which keeps nothing), from a key.
     QuicPacketKey empty;
     QuicPacketKey next;
     CHECK(next.update(empty) == CryptoError::NotReady);
-    CHECK(key.update(key) == CryptoError::Overlap);
-    CHECK(key.ready());
+    CHECK(empty.update(empty) == CryptoError::NotReady);
+    CHECK_FALSE(empty.ready());
     REQUIRE(next.update(key) == CryptoError::None);
     CHECK(next.version() == QuicVersion::V2);
     key.clear();
@@ -456,6 +465,12 @@ TEST_CASE("QUIC: usage limits refuse a packet past the key's limit", "[crypto][n
     CHECK(next.sealed() == 0U);
     CHECK(next.limit() == (u64{1} << 23U));
     CHECK_FALSE(next.update_due());
+    // In place: the exhausted key itself starts the next phase with a fresh count and the AEAD's limit.
+    REQUIRE(key.update(key) == CryptoError::None);
+    CHECK(key.sealed() == 0U);
+    CHECK(key.limit() == (u64{1} << 23U));
+    CHECK(key.seal(8U, packet, 8U) == CryptoError::None);
+    CHECK(next.open(8U, packet, 8U) == CryptoError::None); // the same next phase key
 }
 
 TEST_CASE("QUIC: a changed byte anywhere in a protected packet is refused", "[crypto][net-2][quic]")

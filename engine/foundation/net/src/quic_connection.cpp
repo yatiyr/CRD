@@ -292,11 +292,6 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     {
         m_versions[m_version_count++] = version;
     }
-    m_token_bytes = config.token.size();
-    if (m_token_bytes != 0U)
-    {
-        std::memcpy(m_token, config.token.data(), m_token_bytes);
-    }
     m_config.versions = {};
     m_config.token = {};
     const crypto::CryptoError seeded = config.entropy_seed.empty()
@@ -323,6 +318,8 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     const usize early_bytes = early_context_bytes(config);
     u8* const early = (early_bytes != 0U) ? memory::try_construct_array<u8>(allocator, early_bytes) : nullptr;
     PathSlot* const slots = further ? memory::try_construct_array<PathSlot>(allocator, kFurtherSlots) : nullptr;
+    const usize token_bytes = config.token.size();
+    u8* const token = (token_bytes != 0U) ? memory::try_construct_array<u8>(allocator, token_bytes) : nullptr;
     // Every slot's controller storage for the policy, and a learner where the connection learns: opening a path
     // allocates nothing.
     const QuicPathControlConfig control_config = path_config(config);
@@ -334,7 +331,8 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     }
     void* const recovery = allocator.try_allocate(sizeof(QuicRecovery), alignof(QuicRecovery));
     if (seeded != crypto::CryptoError::None || !stored || frames == nullptr || recovery == nullptr || !streams ||
-        !datagrams || (early_bytes != 0U && early == nullptr) || (further && slots == nullptr) || !controlled)
+        !datagrams || (early_bytes != 0U && early == nullptr) || (further && slots == nullptr) || !controlled ||
+        (token_bytes != 0U && token == nullptr))
     {
         for (QuicSentEntry* space : entries)
         {
@@ -344,8 +342,15 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
         memory::destroy_array(allocator, static_cast<u8*>(recovery), sizeof(QuicRecovery));
         memory::destroy_array(allocator, early, early_bytes);
         memory::destroy_array(allocator, slots, further ? kFurtherSlots : 0U);
+        memory::destroy_array(allocator, token, token_bytes);
         return;
     }
+    if (token_bytes != 0U)
+    {
+        std::memcpy(token, config.token.data(), token_bytes);
+    }
+    m_token = token;
+    m_token_bytes = token_bytes;
     if (early_bytes != 0U && !config.early_context.empty())
     {
         std::memcpy(early + kQuicEarlyParameterBytes, config.early_context.data(), config.early_context.size());
@@ -398,6 +403,8 @@ QuicConnection::~QuicConnection() noexcept
     }
     memory::destroy_array(m_allocator, m_frames, m_frame_size);
     memory::destroy_array(m_allocator, m_early_context, m_early_context_bytes);
+    memory::destroy_array(m_allocator, m_token, m_token_bytes);
+    memory::destroy_array(m_allocator, m_new_token, m_new_token_bytes);
     release_held();
     const usize further = (m_slots != nullptr) ? kFurtherSlots : 0U;
     memory::destroy_array(m_allocator, m_slots, further);
@@ -405,8 +412,8 @@ QuicConnection::~QuicConnection() noexcept
 
 u32 QuicConnection::buffer_allocations() const noexcept
 {
-    return m_streams.buffer_allocations() + m_crypto_allocations + m_table_allocations + m_protection.allocations() +
-           (control_allocations() - m_control_reserved);
+    return m_streams.buffer_allocations() + m_crypto_allocations + m_token_allocations + m_table_allocations +
+           m_protection.allocations() + (control_allocations() - m_control_reserved);
 }
 
 QuicPathControl* QuicConnection::control_at(usize slot) noexcept
@@ -867,12 +874,11 @@ bool QuicConnection::give_new_token(cont::ConstSpan<u8> token) noexcept
     const bool replaces = m_new_token_bytes != 0U && !(m_new_token_path == path()) && address_validated();
     if (m_config.side != crypto::QuicSide::Server || !m_peer_known || token.empty() ||
         token.size() > kQuicMaxCarriedTokenBytes || (m_new_token_bytes != 0U && !replaces) ||
-        (m_state != QuicConnectionState::Handshaking && m_state != QuicConnectionState::Established))
+        (m_state != QuicConnectionState::Handshaking && m_state != QuicConnectionState::Established) ||
+        !keep_token(m_new_token, m_new_token_bytes, token))
     {
         return false;
     }
-    std::memcpy(m_new_token, token.data(), token.size());
-    m_new_token_bytes = token.size();
     m_new_token_path = path();
     ++m_new_token_generation;
     m_new_token_owed = m_confirmed;
@@ -1072,6 +1078,24 @@ void QuicConnection::read_held(u64 now_ns) noexcept
     {
         release_held();
     }
+}
+
+bool QuicConnection::keep_token(u8*& kept, usize& kept_bytes, cont::ConstSpan<u8> token) noexcept
+{
+    u8* const copy = token.empty() ? nullptr : memory::try_construct_array<u8>(m_allocator, token.size());
+    if (!token.empty())
+    {
+        if (copy == nullptr)
+        {
+            return false;
+        }
+        std::memcpy(copy, token.data(), token.size());
+        ++m_token_allocations;
+    }
+    memory::destroy_array(m_allocator, kept, kept_bytes);
+    kept = copy;
+    kept_bytes = token.size();
+    return true;
 }
 
 void QuicConnection::release_held() noexcept
@@ -1343,10 +1367,10 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             enter(QuicConnectionState::Draining, now_ns);
             return false;
         case QuicFrameKind::NewToken:
-            if (frame.data.size() <= sizeof(m_new_token))
+            // One the allocator refuses leaves the one before: a token only spares a later connection a round trip.
+            if (frame.data.size() <= kQuicMaxCarriedTokenBytes)
             {
-                std::memcpy(m_new_token, frame.data.data(), frame.data.size());
-                m_new_token_bytes = frame.data.size();
+                static_cast<void>(keep_token(m_new_token, m_new_token_bytes, frame.data));
             }
             return true;
         case QuicFrameKind::NewConnectionId:
@@ -1900,8 +1924,14 @@ bool QuicConnection::retry(const QuicHeader& header, cont::ConstSpan<u8> packet,
     if (m_retried || m_peer_scid_known || header.version != static_cast<u32>(m_config.version) ||
         !wire::wire_same_bytes(header.dcid, m_local_cid.view()) ||
         wire::wire_same_bytes(header.scid, m_initial_dcid.view()) || packet.size() <= body + crypto::kQuicTagBytes ||
-        packet.size() - body - crypto::kQuicTagBytes > sizeof(m_token) ||
+        packet.size() - body - crypto::kQuicTagBytes > kQuicMaxCarriedTokenBytes ||
         crypto::quic_retry_verify(m_config.version, m_original_dcid.view(), packet) != crypto::CryptoError::None)
+    {
+        ++m_counters.packets_dropped;
+        return false;
+    }
+    // Its token first: a Retry whose token finds no storage is dropped, and the next one is taken.
+    if (!keep_token(m_token, m_token_bytes, packet.subspan(body, packet.size() - body - crypto::kQuicTagBytes)))
     {
         ++m_counters.packets_dropped;
         return false;
@@ -1911,8 +1941,6 @@ bool QuicConnection::retry(const QuicHeader& header, cont::ConstSpan<u8> packet,
         fail(QuicTransportError::InternalError, 0U, now_ns);
         return true;
     }
-    m_token_bytes = packet.size() - body - crypto::kQuicTagBytes;
-    std::memcpy(m_token, packet.data() + body, m_token_bytes);
     static_cast<void>(m_initial_dcid.assign(header.scid)); // at most kQuicMaxConnectionIdBytes, as parsed
     m_retried = true;
     // Recovery starts over and the Initial's CRYPTO data goes again under the new keys; packet numbers continue
@@ -1943,6 +1971,10 @@ void QuicConnection::discard_space(QuicSpace space, u64 now_ns) noexcept
     static_cast<void>(m_recovery->discard(space, now_ns, m_events));
     static_cast<void>(resize_sent(space, 0U, 0U)); // nothing outstanding: it allocates nothing and is never refused
     release_crypto(m_levels[index], true); // nothing of the level is sent or read again (RFC 9001 section 4.9)
+    if (space == QuicSpace::Initial)
+    {
+        static_cast<void>(keep_token(m_token, m_token_bytes, {})); // only Initial packets carry it
+    }
 }
 
 void QuicConnection::confirm(u64 now_ns) noexcept

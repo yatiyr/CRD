@@ -1284,6 +1284,7 @@ TEST_CASE("QUIC packets: a key past its update interval seals on until the updat
     Buffer refused;
     CHECK(append(pair.client, refused, spec_of(QuicPacketType::OneRtt, number), kPing) == QuicPacketError::Exhausted);
     CHECK(quic_packet_close(QuicPacketError::Exhausted) == QuicTransportError::AeadLimitReached);
+    CHECK(quic_packet_close(QuicPacketError::Provider) == QuicTransportError::InternalError);
     pair.client.limit_sealed_packets(0U);
     CHECK(append(pair.client, refused, spec_of(QuicPacketType::OneRtt, number), kPing) == QuicPacketError::None);
 }

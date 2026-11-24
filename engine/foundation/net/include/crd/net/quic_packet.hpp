@@ -204,6 +204,7 @@ enum class QuicPacketError : u8
     IntegrityLimit, // failed opens reached the integrity limit: AEAD_LIMIT_REACHED
     Exhausted,      // a key reached its confidentiality limit and could not be updated: AEAD_LIMIT_REACHED
     Refused,        // seal: the writer refused the layout or the padding
+    Provider,       // the provider failed to derive the next phase's send key, which is gone: INTERNAL_ERROR
 };
 
 // The transport error a packet error closes the connection with; NoError for the errors that only drop the packet.
@@ -314,7 +315,7 @@ public:
     // Seals `writer`'s packet under this side's keys at its level, as QuicPacketWriter::seal; a 1-RTT packet in slot
     // `path`'s number space, under its path ID's nonce. A Handshake packet from a client discards the Initial keys.
     // A 1-RTT packet first starts a key update when the key is due and one is allowed (section 6.1). NoKeys (also
-    // for a closed slot), Exhausted, Refused.
+    // for a closed slot), Exhausted, Refused, Provider.
     [[nodiscard]] QuicPacketError seal(QuicPacketWriter& writer, usize used, QuicPadding padding, usize& written,
                                        usize path = 0U) noexcept;
 
@@ -334,7 +335,8 @@ public:
     // second update before it is KEY_UPDATE_ERROR, section 6.2).
     void sent_acknowledgement() noexcept;
     // Starts a key update now: false when one is not allowed (handshake not confirmed, no packet of the current phase
-    // acknowledged, the previous receive key still held, or the peer has not answered the last update).
+    // acknowledged, the previous receive key still held, or the peer has not answered the last update), and for a
+    // provider failure, which leaves no send key: the send key advances in place.
     [[nodiscard]] bool update_keys() noexcept;
     [[nodiscard]] bool can_update_keys() const noexcept;
     // Whether the receive key of the previous phase is still held, and its discard, which the connection schedules
@@ -421,9 +423,9 @@ private:
     u32 m_allocations = 0U;
     usize m_initial_receive = 1U;
 
-    // 1-RTT: the send key of the current phase (indexed by the phase's bit) and, during an update, its successor; one
-    // header key per direction; three receive keys rotating as previous, current and next.
-    crypto::QuicPacketKey m_send[2];
+    // 1-RTT: the send key of the current phase, which an update advances in place (no sender needs an older one);
+    // one header key per direction; three receive keys rotating as previous, current and next.
+    crypto::QuicPacketKey m_send;
     crypto::QuicHeaderKey m_send_header;
     crypto::QuicPacketKey m_recv[3];
     crypto::QuicHeaderKey m_recv_header;

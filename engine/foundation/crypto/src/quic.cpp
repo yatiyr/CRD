@@ -318,10 +318,6 @@ CryptoError QuicPacketKey::init(QuicVersion version, AlgorithmId aead, cont::Con
 
 CryptoError QuicPacketKey::update(const QuicPacketKey& current) noexcept
 {
-    if (&current == this)
-    {
-        return CryptoError::Overlap;
-    }
     if (!current.ready())
     {
         return CryptoError::NotReady;
@@ -332,14 +328,16 @@ CryptoError QuicPacketKey::update(const QuicPacketKey& current) noexcept
     {
         return CryptoError::Unsupported;
     }
-    const AlgorithmId aead = current.algorithm();
-    const usize       size = current.m_secret_bytes;
+    // Everything init() reads is copied first: init() clears this key, which may be `current`.
+    const AlgorithmId aead    = current.algorithm();
+    const QuicVersion version = current.m_version;
+    const usize       size    = current.m_secret_bytes;
     u8                next[kQuicMaxSecretBytes];
     CryptoError       error = expand_label(suite_hash(aead), cont::ConstSpan<u8>(current.m_secret, size),
                                            parameters->ku, cont::Span<u8>(next, size));
     if (error == CryptoError::None)
     {
-        error = init(current.m_version, aead, cont::ConstSpan<u8>(next, size));
+        error = init(version, aead, cont::ConstSpan<u8>(next, size));
     }
     else
     {

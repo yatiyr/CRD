@@ -837,6 +837,101 @@ TEST_CASE("QUIC connection: a client takes one Retry, for its IDs, with a token 
     }
 }
 
+TEST_CASE("QUIC connection: a token takes storage of its size, a refused one changes nothing, and a client's Initial "
+          "token goes with its Initial keys",
+          "[net][4.2a][quic-connection][memory]")
+{
+    Identity identity;
+    const ConstSpan<u8> original(kInitialDcid, sizeof(kInitialDcid));
+    const ConstSpan<u8> own(kClientCid, sizeof(kClientCid));
+    static constexpr u8 kRetryScid[8] = {0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x71};
+    u8 bytes[40];
+    std::memset(bytes, 0x5A, sizeof(bytes));
+    const ConstSpan<u8> token(bytes, sizeof(bytes));
+
+    SECTION("a Retry's token")
+    {
+        CountingAllocator allocator;
+        QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1));
+        connect(client);
+        u8 out[kDatagram];
+        REQUIRE(client.send(Span<u8>(out, sizeof(out)), kStartNs) == kQuicMinInitialDatagram);
+        const u32 taken = client.buffer_allocations();
+        const usize live = allocator.live();
+        const Datagram retry =
+            retry_of(QuicVersion::V1, own, ConstSpan<u8>(kRetryScid, sizeof(kRetryScid)), token, original);
+        const u64 dropped = client.counters().packets_dropped;
+        allocator.refuse_after(allocator.calls());
+        receive_copy(client, retry, kStartNs + kMs);
+        allocator.refuse_after(~usize{0});
+        CHECK(client.counters().packets_dropped == dropped + 1U);
+        CHECK_FALSE(client.retried());
+        CHECK(same(client.peer_cid(), original));
+        CHECK(client.buffer_allocations() == taken);
+        CHECK(allocator.live() == live);
+
+        receive_copy(client, retry, kStartNs + 2U * kMs); // the server's next Retry is taken
+        REQUIRE(client.retried());
+        CHECK(client.buffer_allocations() == taken + 1U);
+        CHECK(allocator.live() == live + 1U);
+        const usize size = client.send(Span<u8>(out, sizeof(out)), kStartNs + 2U * kMs);
+        QuicHeader header;
+        REQUIRE(parse_quic_header(ConstSpan<u8>(out, size), sizeof(kServerCid), header) == QuicHeaderError::None);
+        CHECK(same(header.token, token));
+    }
+    SECTION("a configured Initial token, and NEW_TOKEN's")
+    {
+        // Two handshakes alike but for the first client's configured token: its one block more goes once Initial
+        // is gone.
+        CountingAllocator allocators[2];
+        CountingAllocator server_allocators[2];
+        QuicConnectionConfig with_token = config_for(QuicSide::Client, identity, QuicVersion::V1);
+        with_token.token = token;
+        QuicConnection client(allocators[0], with_token);
+        QuicConnection plain(allocators[1], config_for(QuicSide::Client, identity, QuicVersion::V1));
+        QuicConnection server(server_allocators[0], config_for(QuicSide::Server, identity, QuicVersion::V1, 1U));
+        QuicConnection other(server_allocators[1], config_for(QuicSide::Server, identity, QuicVersion::V1, 1U));
+        REQUIRE(client.ready());
+        REQUIRE(plain.ready());
+        CHECK(allocators[0].live() == allocators[1].live() + 1U);
+        CHECK(client.buffer_allocations() == 0U); // taken at construction
+        connect(client);
+        connect(plain);
+        auto net = std::make_unique<Net>(client, server);
+        auto plain_net = std::make_unique<Net>(plain, other);
+        REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+        REQUIRE(plain_net->run_until([&] { return both_confirmed(plain, other); }));
+        CHECK(allocators[0].live() == allocators[1].live());
+        for (Net* each : {net.get(), plain_net.get()})
+        {
+            each->advance(each->now + 50U * kMs); // the tickets and acknowledgements after confirmation
+        }
+
+        // A server's token: refused storage refuses it and keeps nothing, then it is kept at its size.
+        const u32 taken = server.buffer_allocations();
+        server_allocators[0].refuse_after(server_allocators[0].calls());
+        CHECK_FALSE(server.give_new_token(token));
+        server_allocators[0].refuse_after(~usize{0});
+        CHECK(server.new_token().empty());
+        CHECK(server.buffer_allocations() == taken);
+        const u32 client_taken = client.buffer_allocations();
+        REQUIRE(server.give_new_token(token));
+        CHECK(same(server.new_token(), token));
+        CHECK(server.buffer_allocations() == taken + 1U);
+        // A client refused storage for one keeps none and goes on; one with storage keeps it at its size.
+        REQUIRE(other.give_new_token(token));
+        allocators[1].refuse_after(allocators[1].calls());
+        plain_net->flush();
+        plain_net->advance(plain_net->now + 50U * kMs);
+        allocators[1].refuse_after(~usize{0});
+        plain_net->advance(plain_net->now + 1000U * kMs); // acknowledged, it is never sent again
+        CHECK(plain.new_token().empty());
+        CHECK(plain.state() == QuicConnectionState::Established);
+        REQUIRE(net->run_until([&] { return same(client.new_token(), token); }));
+        CHECK(client.buffer_allocations() == client_taken + 1U);
+    }
+}
+
 TEST_CASE("QUIC connection: behind an ingress that proves every address, Retry and NEW_TOKEN carry clients through "
           "loss",
           "[net][4.2a][quic-connection]")

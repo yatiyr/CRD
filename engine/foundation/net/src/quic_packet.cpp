@@ -310,6 +310,8 @@ QuicTransportError quic_packet_close(QuicPacketError error) noexcept
         case QuicPacketError::IntegrityLimit:
         case QuicPacketError::Exhausted:
             return QuicTransportError::AeadLimitReached;
+        case QuicPacketError::Provider:
+            return QuicTransportError::InternalError;
         default:
             return QuicTransportError::NoError;
     }
@@ -346,10 +348,7 @@ void QuicPacketProtection::clear_all() noexcept
         m_levels->early.clear();
     }
     m_initial_receive = 1U;
-    for (crypto::QuicPacketKey& key : m_send)
-    {
-        key.clear();
-    }
+    m_send.clear();
     for (crypto::QuicPacketKey& key : m_recv)
     {
         key.clear();
@@ -516,7 +515,7 @@ crypto::CryptoError QuicPacketProtection::install(crypto::QuicHandshake& handsha
             }
             else if (level == crypto::QuicLevel::Application && m_phases.send == 0U && m_phases.recv == 0U)
             {
-                packet = sending ? &m_send[0] : &m_recv[0];
+                packet = sending ? &m_send : &m_recv[0];
                 header = sending ? &m_send_header : &m_recv_header;
             }
             else if (level == crypto::QuicLevel::Early && !m_early_gone && client_secret)
@@ -574,7 +573,7 @@ crypto::CryptoError QuicPacketProtection::install(crypto::QuicLevel level, bool 
             break;
         case crypto::QuicLevel::Application:
         {
-            crypto::QuicPacketKey& packet = sending ? m_send[0] : m_recv[0];
+            crypto::QuicPacketKey& packet = sending ? m_send : m_recv[0];
             crypto::QuicHeaderKey& header = sending ? m_send_header : m_recv_header;
             if (packet.ready() || header.ready() || m_phases.send != 0U || m_phases.recv != 0U)
             {
@@ -611,7 +610,7 @@ crypto::CryptoError QuicPacketProtection::finish_install(crypto::QuicLevel level
     }
     if (sending)
     {
-        m_send[0].set_limit(send_limit());
+        m_send.set_limit(send_limit());
         // A client discards its 0-RTT keys once it has 1-RTT keys (RFC 9001 section 4.9.3).
         if (m_side == crypto::QuicSide::Client)
         {
@@ -635,7 +634,7 @@ bool QuicPacketProtection::can_send(QuicPacketType type) const noexcept
         case QuicPacketType::ZeroRtt:
             return m_side == crypto::QuicSide::Client && m_levels != nullptr && m_levels->early.ready();
         case QuicPacketType::OneRtt:
-            return m_send[m_phases.send & 1U].ready() && m_send_header.ready();
+            return m_send.ready() && m_send_header.ready();
         default:
             return false;
     }
@@ -710,10 +709,7 @@ void QuicPacketProtection::discard(crypto::QuicLevel level) noexcept
             release_levels();
             break;
         default:
-            for (crypto::QuicPacketKey& key : m_send)
-            {
-                key.clear();
-            }
+            m_send.clear();
             for (crypto::QuicPacketKey& key : m_recv)
             {
                 key.clear();
@@ -757,11 +753,11 @@ QuicPacketError QuicPacketProtection::seal(QuicPacketWriter& writer, usize used,
             header = &m_levels->early.header;
             break;
         default:
-            if (update_due(m_send[m_phases.send & 1U]) && can_update_keys())
+            if (update_due(m_send) && can_update_keys() && !update_keys())
             {
-                (void)update_keys(); // can_update_keys() held, so only the provider can refuse; the limit then decides
+                return QuicPacketError::Provider; // can_update_keys() held, so only the provider refused
             }
-            packet = &m_send[m_phases.send & 1U];
+            packet = &m_send;
             header = &m_send_header;
             break;
     }
@@ -953,14 +949,14 @@ QuicPacketError QuicPacketProtection::open_application(cont::Span<u8> packet, us
     out.key_update = true;
     if (m_phases.send < m_phases.recv)
     {
-        crypto::QuicPacketKey& next = m_send[m_phases.recv & 1U];
-        if (next.update(m_send[m_phases.send & 1U]) == crypto::CryptoError::None)
+        // The answer: this side's send key follows into the new phase.
+        if (m_send.update(m_send) != crypto::CryptoError::None)
         {
-            next.set_limit(send_limit());
-            m_send[m_phases.send & 1U].clear();
-            start_send_phase(m_phases.recv);
-            m_phases.answer_owed = true;
+            return QuicPacketError::Provider;
         }
+        m_send.set_limit(send_limit());
+        start_send_phase(m_phases.recv);
+        m_phases.answer_owed = true;
     }
     return QuicPacketError::None;
 }
@@ -1073,7 +1069,7 @@ void QuicPacketProtection::sent_acknowledgement() noexcept
 bool QuicPacketProtection::can_update_keys() const noexcept
 {
     return m_confirmed && m_phases.send_acked && !m_phases.previous_held && m_phases.send == m_phases.recv &&
-           m_send[m_phases.send & 1U].ready();
+           m_send.ready();
 }
 
 bool QuicPacketProtection::update_keys() noexcept
@@ -1082,13 +1078,11 @@ bool QuicPacketProtection::update_keys() noexcept
     {
         return false;
     }
-    crypto::QuicPacketKey& current = m_send[m_phases.send & 1U];
-    if (m_send[(m_phases.send + 1U) & 1U].update(current) != crypto::CryptoError::None)
+    if (m_send.update(m_send) != crypto::CryptoError::None)
     {
         return false;
     }
-    m_send[(m_phases.send + 1U) & 1U].set_limit(send_limit());
-    current.clear();
+    m_send.set_limit(send_limit());
     start_send_phase(m_phases.send + 1U);
     return true;
 }
@@ -1096,13 +1090,7 @@ bool QuicPacketProtection::update_keys() noexcept
 void QuicPacketProtection::limit_sealed_packets(u64 limit) noexcept
 {
     m_sealed_limit = limit;
-    for (crypto::QuicPacketKey& key : m_send)
-    {
-        if (key.ready())
-        {
-            key.set_limit(send_limit());
-        }
-    }
+    m_send.set_limit(send_limit()); // a key that holds none ignores it
 }
 
 void QuicPacketProtection::discard_previous() noexcept
