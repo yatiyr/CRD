@@ -61,7 +61,7 @@ class Arm:
         command = [self.program, '--role', role, '--port', str(port), '--seed', SEED, '--connections',
                    str(connections), '--window', str(window)]
         if role == 'client':
-            command += ['--parallel', str(parallel), '--bytes', str(size), '--hold', '1' if hold else '0']
+            command += ['--parallel', str(parallel), '--bytes', str(size)] + (['--hold', '1'] if hold else [])
         if self.group:
             command += ['--group', GROUP]
         if self.offload is not None:

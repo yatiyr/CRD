@@ -45,7 +45,15 @@ Why the gap: each crd-net connection allocates and zeroes its full capacity when
 - held packets: 11.5 KiB
 - recovery: 2.8 KiB
 
-That is 241 KiB; TLS and stream state make up the rest. msquic allocates these as they are used.
+That is 241 KiB; TLS and stream state make up the rest. msquic's sources (2.6.4) do it differently:
+
+- one TLS send buffer for every level, 4 KiB on a client and 8 KiB on a server (`quicdef.h`);
+- a crypto receive buffer that grows as data arrives (`crypto.c`);
+- sent-packet metadata taken from a pool as each packet is sent (`sent_packet_metadata.c`).
+
+Also checked here: the board check passes in `linux-gcc-public-checks` 20 of 20 times through CTest and 10 of 10
+pinned to two cores, and the 19 `crd-no-*` and `crd-check*` guards pass. The driver passes `--hold` only to a
+holding client, so a `--baseline` build from before this change still runs.
 
 ## Next
 
