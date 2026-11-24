@@ -17,7 +17,7 @@ declares such a local constant. Its other jobs were still running; no other red.
 - Tests: a train-cap case (in recovery 24000, the proven length, where the cap is 48000 and the old rule gave 12000;
   the cap back after the period); the coarse-turn case gains the 1 Gbit/s, 256 KiB, 20 ms row (2.4 times version 7)
   and the turn-cap rows (80 and 90 Mbit/s within 0.5% of version 7; 100 Mbit/s at 1 ms turns at 99% of version 7
-  with exact timers, which version 8 equals).
+  with exact timers, which version 8 meets or beats).
 
 ## Evidence ([board note](../bench/2026-11-24-net-path-recovery-burst.md): all 96 rows before and after)
 
@@ -25,9 +25,10 @@ declares such a local constant. Its other jobs were still running; no other red.
   initial window a turn); with the proven train at 880 Mbit/s: 75.3% to 93.1% (CUBIC 93.0% to 96.8%). The cap
   itself in recovery cut CUBIC's 100 Mbit/s 12 KB 20 ms exact-timer row to 83.4%; the proven train keeps 88.6%.
 - (b): v7's 95.1% at 100 Mbit/s and 1 ms turns is its 96 Mbit/s turn cap under the link (99.0% at 96 Mbit/s; under
-  the cap both versions equal within 0.1; above it v7 leaves 13-37% unused). Its zero drops at 1 Gbit/s and 250 us
-  are the 38% it is held to; with exact timers it drops more than version 8 does at 250 us. One row is 0.1 lower
-  (path detail: 27 neighbouring paths, means within 0.05 either way).
+  the cap v8 is at most 0.1 below and up to 0.4 above; above it v7 leaves 13-37% unused). Its zero drops at 1 Gbit/s
+  and 250 us are its 12000 bytes a turn, 38.4%/37.9% at every depth; with exact timers it drops too, more than v8 at
+  250 us except at 64 KiB 2 ms (v8 below exact-timer v7 on link and drops) and NewReno 256 KiB. Drops rose on 9 of
+  14 changed rows; one row is 0.1 lower (27 neighbouring paths: means within 0.05 either way).
 - Open: the exact-timer row (CUBIC 1 Gbit/s 12 KB 2 ms 87.4% against 88.3%) is the first 250 ms: version 8 leaves
   slow start at 114,000 bytes after 24000-byte trains overflow the 12 KB queue (8 drops), version 7 at 406,800 (174).
   Steady state 88.4% against 88.2-88.7%. Making slow-start train losses teach without a reduction was tried and
@@ -40,4 +41,6 @@ declares such a local constant. Its other jobs were still running; no other red.
 
 ## Next
 
-The exact-timer slow-start exit above; then NET-PATH's Remaining.
+Regression (b)'s exact-timer row stays open: bursting only the initial window restores 88.3/212/41, so the
+quantum in slow start is the cause; the slow-start teach arm left the row unchanged, so the loss ending slow start
+is not one `teach_train` handles. Then NET-PATH's Remaining.

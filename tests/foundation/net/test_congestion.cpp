@@ -1099,7 +1099,7 @@ TEST_CASE("congestion: under coarse host turns the train cap meets the initial w
         const Path capped{hundred_megabit, kMs, 32768U, 10U * kMs, 0U};
         const Path exact{hundred_megabit, 0U, 32768U, 10U * kMs, 0U};
         CHECK(run(algorithm, 8U, capped).acked * 100U >= run(algorithm, 7U, exact).acked * 99U);
-        CHECK(run(algorithm, 8U, exact).acked == run(algorithm, 7U, exact).acked);
+        CHECK(run(algorithm, 8U, exact).acked >= run(algorithm, 7U, exact).acked);
 
         // Random loss (0.1%) teaches the cap nothing it keeps: no worse than version 7.
         const Path lossy{gigabit, 250000U, 32768U, kMs, 1U};

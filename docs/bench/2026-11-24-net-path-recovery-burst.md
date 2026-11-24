@@ -203,17 +203,23 @@ Version 7 bursts 12000 bytes a turn: 96 Mbit/s at 1 ms turns. Sweeping the link 
   83.4% (88.6% both before and after): a growth still unproven overflowed the queue the reduction left full.
 - The one row after is below before by 0.1 (NewReno, 100 Mbit/s, 1 ms turns, 32 KiB, 2 ms: 96.4% to 96.3%). Over
   27 nearby paths (98 to 102 Mbit/s, the queue plus 0, 600 or 1200 bytes) the two rules' means differ by at most
-  0.05 points either way and each wins on some: path detail, not the rule. CUBIC 100 Mbit/s 256 KiB 20 ms drops 962
-  against 872 at the same 99.0%.
+  0.05 points either way and each wins on some: path detail, not the rule. Drops rose on 9 of the 14
+  changed rows; on two with no gain: CUBIC 100 Mbit/s 1 ms 256 KiB 20 ms 962 against 872 at 99.0%, NewReno 100
+  Mbit/s 1 ms 32 KiB 2 ms 206 against 203.
 - Version 7's 95.1% and 95.9% at 100 Mbit/s and 1 ms turns, with no drop, are its 96 Mbit/s turn cap sitting under
   the link: at 96 Mbit/s it gets 99.9% and 99.0%; under the cap (80, 90 Mbit/s) it fills the queue, drops and
-  reduces like any controller and version 8 gets the same within 0.1; above it (110, 150 Mbit/s) the cap leaves 13
+  reduces like any controller and version 8 gets at most 0.1 point less (up to 0.4 more); above it (110, 150 Mbit/s) the cap leaves 13
   to 37% of the link unused, which version 8 fills. On the 100 Mbit/s link version 8 at 1 ms turns gets what both
   versions get with exact timers (CUBIC 32 KiB 20 ms 92.3% against 91.0%, NewReno 81.1% against 81.6%, NewReno
   64 KiB 89.9% against 86.9%).
-- Drops where version 7 dropped none (1 Gbit/s, 250 us turns, deep queues): version 7 is held to 38% there and
-  never fills a queue. With exact timers, where it does, it drops too: 32 KiB at 2 ms 359 at 93.1% of the link,
-  where version 8 at 250 us turns drops 123 at 99.7%; 256 KiB at 20 ms 3,584 at 85.3%, version 8 2,771 at 96.8%.
+- Drops where version 7 dropped none (1 Gbit/s, 250 us turns, deep queues): version 7 delivers exactly 12000
+  bytes a turn at every depth (38.4% at 2 ms, 37.9% at 20 ms) and never fills a queue. With exact timers it fills
+  and drops; against version 8 at 250 us turns (link / drops): 32 KiB 2 ms 93.1% / 359 against 99.7% / 123, 20 ms
+  68.6% / 2,170 against 97.7% / 487; 64 KiB 20 ms 72.2% / 2,516 (NewReno 56.8% / 1,634) against 96.7% / 1,553;
+  256 KiB 2 ms 99.9% / 610 against 99.9% / 581 (NewReno 99.8% / 443 against 99.5% / 474); 256 KiB 20 ms 85.3% /
+  3,584 against 96.8% / 2,771 (NewReno 65.0% / 2,439 against 93.1% / 2,601). At 64 KiB and 2 ms version 8 at
+  250 us turns is below exact-timer version 7 on both: CUBIC 94.2% / 532 against 98.0% / 402, NewReno 84.5% / 372
+  against 89.1% / 302.
 - The exact-timer row (CUBIC, 1 Gbit/s, 12 KB, 2 ms: 87.4% against 88.3%; NewReno 77.3% against 77.7%) is not the
   recovery rule: it is the first 250 ms. Version 8's slow start bursts 24000-byte trains (the cap's first doubling)
   into the 12 KB queue, loses 8 packets and leaves slow start at a 114,000-byte window (1 reduction); version 7 runs
@@ -222,4 +228,4 @@ Version 7 bursts 12000 bytes a turn: 96 Mbit/s at 1 ms turns. Sweeping the link 
   row identical before and after.
 - QUIC board (`quic_board.py --rounds 5`, interleaved with f5cf140a's build, whose engine differs from 0a1b61b9's
   only in path validation): 64 KiB windows 415 against 411 MiB per CPU-second and 651 against 669 per wall second;
-  1 MiB windows 562 against 574 and 983 against 908. Within the rounds' spread: loopback enters no recovery period.
+  1 MiB windows 562 against 574 and 983 against 908. Within the rounds' spread; the rule acts only inside a recovery period.
