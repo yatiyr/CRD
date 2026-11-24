@@ -71,6 +71,67 @@ TEST_CASE("QUIC paths: admission takes free slots, a full table names its least 
     CHECK(paths.admit(at(5, 1000), 60U) == 0U);
 }
 
+TEST_CASE("QUIC paths: a failed validation reverts to the fallback, or with none to the validated path that was "
+          "active before and that the peer was heard on last",
+          "[net][net-path][quic-path]")
+{
+    QuicPaths paths;
+    paths.open(at(1, 1000), true, 0U);
+    const usize b = paths.admit(at(2, 1000), 10U);
+    const usize c = paths.admit(at(3, 1000), 20U);
+    const usize d = paths.admit(at(4, 1000), 30U);
+    for (const usize index : {b, c, d})
+    {
+        paths.set_validated(index);
+    }
+    CHECK(paths.revert_target(false) == kQuicNoPath); // the one path that was active is active
+    paths.activate(b);
+    CHECK(paths.revert_target(false) == 0U); // the fallback
+    paths.activate(c);
+    paths.activate(d);
+    REQUIRE(paths.fallback() == c);
+    // The fallback given up (as a client forgets the path it left once the server followed): the validated path
+    // left behind that the peer was heard on last, whichever slot it holds.
+    paths.drop(c);
+    REQUIRE(paths.fallback() == kQuicNoPath);
+    paths.on_received(0U, 100U, 60U);
+    paths.on_received(b, 100U, 70U);
+    CHECK(paths.revert_target(false) == b);
+    paths.on_received(0U, 100U, 80U);
+    CHECK(paths.revert_target(false) == 0U);
+    // A path validated but never active (a move that waits, a probe) is none, however recent.
+    const usize e = paths.admit(at(5, 1000), 90U);
+    paths.set_validated(e);
+    paths.on_received(e, 100U, 95U);
+    CHECK(paths.revert_target(false) == 0U);
+    paths.drop(0U);
+    paths.drop(b);
+    CHECK(paths.revert_target(false) == kQuicNoPath);
+
+    // A client keeps to the server address it uses: a path it carried to another one is none.
+    QuicPaths client;
+    client.open(at(1, 443), true, 0U);
+    const usize same = client.admit(at(1, 443, 1U), 10U); // its other sockets to the same address
+    const usize again = client.admit(at(1, 443, 2U), 20U);
+    const usize other = client.admit(at(9, 443), 30U);
+    for (const usize index : {same, again, other})
+    {
+        client.set_validated(index);
+    }
+    for (const usize index : {other, again, same, usize{0U}})
+    {
+        client.activate(index);
+    }
+    client.drop(same); // the fallback given up
+    REQUIRE(client.fallback() == kQuicNoPath);
+    client.on_received(other, 100U, 90U);
+    CHECK(client.revert_target(false) == other);
+    CHECK(client.revert_target(true) == again);
+    client.drop(again);
+    CHECK(client.revert_target(true) == kQuicNoPath);
+    CHECK(client.revert_target(false) == other);
+}
+
 TEST_CASE("QUIC paths: an unvalidated path carries three times what arrived on it, a validated one anything",
           "[net][net-path][quic-path]")
 {

@@ -26,6 +26,7 @@ void QuicPaths::open(const QuicPath& path, bool validated, u64 now_ns) noexcept
     slot.used = true;
     slot.path = path;
     slot.validated = validated;
+    slot.carried = true;
     slot.proven = validated;
     slot.last_ns = now_ns;
 }
@@ -70,6 +71,26 @@ usize QuicPaths::least_recent(usize kept) const noexcept
     {
         const bool spare = m_slots[index].used && index != m_active && index != m_fallback && index != kept;
         if (spare && (chosen == kQuicNoPath || m_slots[index].last_ns < m_slots[chosen].last_ns))
+        {
+            chosen = index;
+        }
+    }
+    return chosen;
+}
+
+usize QuicPaths::revert_target(bool same_peer) const noexcept
+{
+    if (m_fallback != kQuicNoPath)
+    {
+        return m_fallback;
+    }
+    usize chosen = kQuicNoPath;
+    for (usize index = 0U; index < kQuicMaxPaths; ++index)
+    {
+        const Slot& slot = m_slots[index];
+        const bool peer = !same_peer || slot.path.peer == m_slots[m_active].path.peer;
+        const bool left = slot.used && slot.validated && slot.carried && peer && index != m_active;
+        if (left && (chosen == kQuicNoPath || slot.last_ns > m_slots[chosen].last_ns))
         {
             chosen = index;
         }
@@ -125,6 +146,7 @@ void QuicPaths::activate(usize index) noexcept
     m_fallback = m_slots[m_active].validated ? m_active : m_fallback;
     m_fallback = (m_fallback == index) ? kQuicNoPath : m_fallback;
     m_active = index;
+    m_slots[index].carried = true;
 }
 
 void QuicPaths::on_received(usize index, usize bytes, u64 now_ns) noexcept

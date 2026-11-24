@@ -7,8 +7,9 @@
 //               active: datagrams go there. A path joins once a packet from it opened, never on bytes alone; when the
 //               table is full the connection gives up its least recently used path that is neither active nor the
 //               fallback (the last validated path before the active one, which a failed validation reverts to:
-//               section 9.3.2). A validated path left behind stays known, so the peer may return without another
-//               validation (section 9.3), until it is given up.
+//               section 9.3.2, or with no fallback a validated path that was active before). A validated path left
+//               behind stays known, so the peer may return without another validation (section 9.3), until it is
+//               given up.
 //   amplification  until a path is validated, what goes on it stays within three times what arrived on it (sections
 //               8.1 and 9.3.1); a validated path is unlimited.
 //   validation  a PATH_CHALLENGE of fresh unpredictable data goes on the path, again after the probe period and then
@@ -84,9 +85,13 @@ public:
 
     [[nodiscard]] usize active() const noexcept { return m_active; }
     [[nodiscard]] usize fallback() const noexcept { return m_fallback; }
+    // Where a failed validation of the active path reverts (section 9.3.2): the fallback, or with none (given up
+    // once the peer followed a move) the validated path that was active before and that the peer was last heard on.
+    // A path only validated, never active (a move that waits, a probe), is no path left behind; with `same_peer`, nor
+    // one to another peer address (a client keeps to the server address it uses, section 9.6.1).
+    [[nodiscard]] usize revert_target(bool same_peer) const noexcept;
     // Datagrams go on `index` from now on; the active path before it becomes the fallback when validated.
     void activate(usize index) noexcept;
-    void clear_fallback() noexcept { m_fallback = kQuicNoPath; }
 
     // ---- Amplification ----
 
@@ -180,7 +185,8 @@ private:
         u64 local_sequence = 0U;
         bool used = false;
         bool validated = false;
-        bool proven = false; // carries 1200-byte datagrams
+        bool carried = false; // was the active path
+        bool proven = false;  // carries 1200-byte datagrams
         bool response_owed = false;
         bool observation_owed = true;
         u64 observation_sequence = kQuicNoObservation; // the latest sent there

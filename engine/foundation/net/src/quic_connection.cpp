@@ -4103,9 +4103,10 @@ void QuicConnection::on_validated(usize slot, usize index, u64 now_ns) noexcept
 void QuicConnection::expire_paths(u64 now_ns) noexcept
 {
     // A sending slot's 4-tuples that failed validation are forgotten. When the active one fails, the handshake slot
-    // falls back to its last validated one (RFC 9000 section 9.3.2); with none, or in a further slot, its path ID is
-    // abandoned (RFC 10069 section 3.1) with the code of a path that does not work, and the last path still sending
-    // ends the connection silently (section 9.3.2: no validated path is left).
+    // falls back to its last validated one (RFC 9000 section 9.3.2), the fallback or a validated one it carried
+    // before (QuicPaths::revert_target: a client that forgot the path it left still has those); with none, or in a
+    // further slot, its path ID is abandoned (RFC 10069 section 3.1) with the code of a path that does not work, and
+    // the last path still sending ends the connection silently (section 9.3.2: no validated path is left).
     for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
     {
         if (!m_protection.path_open(slot) || m_controls[slot] == nullptr)
@@ -4116,7 +4117,7 @@ void QuicConnection::expire_paths(u64 now_ns) noexcept
         for (usize index = paths.expired(now_ns); index != kQuicNoPath; index = paths.expired(now_ns))
         {
             ++m_counters.path_failures;
-            const usize back = handshake_slot(slot) ? paths.fallback() : kQuicNoPath;
+            const usize back = handshake_slot(slot) ? paths.revert_target(!follows_peer()) : kQuicNoPath;
             if (index != paths.active() || back != kQuicNoPath)
             {
                 if (index == paths.active())
