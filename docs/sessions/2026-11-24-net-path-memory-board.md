@@ -15,6 +15,9 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Everything ran on this PC (WSL2, 
 - udp-ring host-check 45299047960 (6983e336) ran on an Azure host (7.0.0-1017-azure, memlock 8 MiB). All 640 opens
   got every buffer they asked for, from 4 to 32768, both alone and beside four crd-net-tests runs. CI 45238977369's
   refusal still does not reproduce.
+- Fuzz host-check 45351689742 ran 5f977e19, which is before c7360990. Its `net-quic-connection` seed 8702 failed
+  the transfer oracle on input 5ed387c4, the oracle c7360990 changed. The input passes on HEAD in both arms and is
+  now in `corpus-quic-connection`, whose 78 inputs replay clean.
 - msquic arm: the connection of 2,000 that never ended does not reproduce in 140,000 connections at 1 MiB windows.
   That is 40 pairs of 2,000, 30 more pinned to two cores, and a three-round handshake board. When a run does not
   end, the msquic end now prints each live connection's state on standard error.
