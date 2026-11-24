@@ -636,9 +636,11 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   names the records after a move, and a refused growth closes with INTERNAL_ERROR (the frame is in the packet
   already). Once nothing ack-eliciting is in flight, three PTOs after the last one sent, a grown table shrinks
   to its first size when that holds what it keeps, else to twice that, and `next_timer_ns()` names that time. The held-packet ring is taken
-  only when a packet waits for its keys and goes back once it holds none; a refusal drops that packet. Counting:
-  `buffer_allocations()` (every allocation after construction), `buffer_bytes()` (stream and CRYPTO buffers) and
-  `table_bytes()`.
+  only when a packet waits for its keys and goes back once it holds none; a refusal drops that packet. The Initial,
+  Handshake and 0-RTT keys (2026-11-24, 5.6 KiB) are one block `QuicPacketProtection` takes at its start and wipes
+  and frees once all three levels are discarded, so a confirmed connection holds only its 1-RTT keys; a keyed
+  connection takes none, and a refused block refuses the start. Counting: `buffer_allocations()` (every allocation
+  after construction), `buffer_bytes()` (stream and CRYPTO buffers) and `table_bytes()`.
 
 Evidence: `test_quic_connection.cpp` (22 cases: both versions to confirmation, nothing allocated after construction;
 40 seeded paths that lose 20%, duplicate 10% and reorder; a server held to three times what it received and silent
@@ -658,7 +660,8 @@ is the one owner of a connection's streams (RFC 9000 sections 2 to 4, 13.3 and 1
 credits and their frames. It knows nothing of packets: the connection asks it for frames and settles their records.
 
 - **Slots.** Each of the four stream types has a fixed pool of slots, each holding S38's buffers and credits, taken
-  from the injected allocator once. A slot's buffers (2026-11-24) come when it first holds a stream, `first_bytes`
+  from the injected allocator once. A slot's buffers (2026-11-24) come when its stream first has data for them
+  (a stream carrying only a FIN or a reset takes none), `first_bytes`
   each (4 KiB by default, or the limit when smaller), and double as its data needs up to `receive_bytes` and
   `send_bytes`: the receive buffer before it stores data the windows allowed, the send buffer before `write()` or
   `send_room()` would find no room. The slot keeps them for its later streams, so a steady load allocates nothing.
@@ -666,8 +669,8 @@ credits and their frames. It knows nothing of packets: the connection asks it fo
   less what was read is at most the connection window), so they hold under twice it plus 4 KiB per open stream; kept
   buffers make every slot's limits the worst case, which was the cost of every connection before. Room
   the windows granted that the allocator refuses closes the connection with INTERNAL_ERROR (as msquic and ngtcp2
-  do); a send buffer that cannot grow takes less, and a slot refused its first buffers opens no stream (NoMemory, or
-  INTERNAL_ERROR for the peer's). `first_bytes` at the limits gives a slot whole buffers with its first stream.
+  do); a send buffer that cannot grow takes less, none at all when refused its first. `first_bytes` at the limits
+  gives a slot whole buffers with its first data.
   `buffer_allocations()` and `buffer_bytes()` say what the buffers took; `send_owed()` what a stream's send buffer
   still holds (room no longer says it is empty). Measured: on the QUIC board a
   connection made its 1 MiB windows' buffers whole at connect, so its handshakes per CPU-second followed the window

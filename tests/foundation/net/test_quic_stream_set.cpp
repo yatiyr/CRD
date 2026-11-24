@@ -377,9 +377,10 @@ TEST_CASE("QUIC stream set: streams open within the peer's grant, with one STREA
     u64 more = 0U;
     CHECK(c.open(true, more) == QuicStreamError::NoSlot); // four slots, all in use
     CHECK(c.open_streams() == 5U);
-    // The sets' three tables each, then the buffers of each slot holding a stream: two for a bidirectional one,
-    // one for a unidirectional one that only sends.
-    CHECK(pair.allocator.calls() == 6U + (4U * 2U) + 1U);
+    // The sets' three tables each, and no buffer: no stream has carried data.
+    CHECK(pair.allocator.calls() == 6U);
+    CHECK(pair.end[0].buffer_allocations() == 0U);
+    CHECK(pair.end[1].buffer_allocations() == 0U);
 }
 
 TEST_CASE("QUIC stream set: every stream frame error RFC 9000 names", "[net][4.2a][quic-stream-set]")
@@ -1379,24 +1380,26 @@ TEST_CASE("QUIC stream set: buffers come as streams need them, double up to thei
             bytes[at] = pattern(1U, at);
         }
 
-        // The peer's stream 0: its first frame gives the slot both buffers at kQuicStreamFirstBytes.
+        // The peer's stream 0: its first data gives the slot its receive buffer at kQuicStreamFirstBytes; the send
+        // buffer waits for data to send.
         REQUIRE(frame_to(server, QuicFrameKind::Stream, 0U, 0U, ConstSpan<u8>(bytes, 100U)) ==
                 QuicTransportError::NoError);
-        CHECK(allocator.calls() == built + 2U);
+        CHECK(allocator.calls() == built + 1U);
+        CHECK(server.buffer_bytes() == kQuicStreamFirstBytes + (quic_stream_bitmap_words(kQuicStreamFirstBytes) * 8U));
         // Data inside the window and past the buffer doubles it, as far as it must, in one step.
         REQUIRE(frame_to(server, QuicFrameKind::Stream, 0U, 0U, ConstSpan<u8>(bytes + 10000U, 100U), false, 10000U) ==
                 QuicTransportError::NoError);
-        CHECK(allocator.calls() == built + 3U);
-        CHECK(allocator.live() == built + 2U); // the smaller buffer went back
+        CHECK(allocator.calls() == built + 2U);
+        CHECK(allocator.live() == built + 1U); // the smaller buffer went back
         REQUIRE(frame_to(server, QuicFrameKind::Stream, 0U, 0U, ConstSpan<u8>(bytes + 100U, 9900U), false, 100U) ==
                 QuicTransportError::NoError);
         u64 offset = 0U;
         CHECK_FALSE(drain(server, 0U, offset, 1U));
         CHECK(offset == 10100U); // what arrived before the growth moved with it
 
-        // A final size alone needs no room: RESET_STREAM far into the window grows nothing.
+        // A final size alone needs no room: RESET_STREAM far into the window opens stream 4 and takes nothing.
         REQUIRE(frame_to(server, QuicFrameKind::ResetStream, 4U, 16000U) == QuicTransportError::NoError);
-        CHECK(allocator.calls() == built + 5U); // stream 4's first buffers
+        CHECK(allocator.calls() == built + 2U);
         allocator.refuse_after(allocator.calls());
         CHECK(frame_to(server, QuicFrameKind::Stream, 0U, 0U, {}, true, 16384U) == QuicTransportError::NoError);
         // Data that fits allocates nothing; data the window grants past the buffer, refused room, closes.
@@ -1411,31 +1414,35 @@ TEST_CASE("QUIC stream set: buffers come as streams need them, double up to thei
         CHECK(frame_to(server, QuicFrameKind::Stream, 8U, 0U, ConstSpan<u8>(bytes + 5000U, 1U), false, 5000U) ==
               QuicTransportError::InternalError);
 
-        // This side's streams: an open refused its buffers takes no ID, and a send buffer refused growth takes what
-        // fits and owes a Writable event.
+        // This side's streams: an open allocates nothing, so the refusing allocator still opens one; its send buffer
+        // refused its first block takes nothing, and refused growth takes what fits.
         u64 id = 0U;
-        CHECK(server.open(true, id) == QuicStreamError::NoMemory);
-        CHECK(server.can_open(true));
-        allocator.refuse_after(~usize{0});
         REQUIRE(server.open(true, id) == QuicStreamError::None);
         CHECK(id == 1U);
-        allocator.refuse_after(allocator.calls());
         usize taken = 0U;
         REQUIRE(server.write(id, ConstSpan<u8>(bytes, 10000U), false, taken) == QuicStreamError::None);
-        CHECK(taken == kQuicStreamFirstBytes);
+        CHECK(taken == 0U);
+        CHECK(server.send_owed(id) == 0U);
+        CHECK(server.send_room(id, 1U) == 0U);
+        allocator.refuse_after(allocator.calls() + 1U); // the first block, then no growth
+        REQUIRE(server.write(id, ConstSpan<u8>(bytes, 100U), false, taken) == QuicStreamError::None);
+        CHECK(taken == 100U);
+        REQUIRE(server.write(id, ConstSpan<u8>(bytes + 100U, 9900U), false, taken) == QuicStreamError::None);
+        CHECK(taken == kQuicStreamFirstBytes - 100U);
         CHECK(server.send_owed(id) == kQuicStreamFirstBytes);
         CHECK(server.send_owed(99U) == 0U); // no such stream
         CHECK(server.send_room(id, 1U) == 0U);
         allocator.refuse_after(~usize{0});
         CHECK(server.send_room(id, 6000U) == 16384U - kQuicStreamFirstBytes); // grown to the limit, which holds it
-        REQUIRE(server.write(id, ConstSpan<u8>(bytes + taken, 10000U - taken), false, taken) == QuicStreamError::None);
+        REQUIRE(server.write(id, ConstSpan<u8>(bytes + kQuicStreamFirstBytes, 10000U - kQuicStreamFirstBytes), false,
+                             taken) == QuicStreamError::None);
         CHECK(taken == 10000U - kQuicStreamFirstBytes);
         CHECK(server.send_room(id, 16384U) == 16384U - 10000U); // the limit holds
         CHECK(allocator.live() > built);
     }
     CHECK(allocator.live() == 0U);
 
-    // first_bytes sets the first size: the smallest chunk, or the limits (whole buffers with the first stream).
+    // first_bytes sets the first size: the smallest chunk, or the limits (whole buffers with the first data).
     for (const u32 first : {u32{64}, u32{16384}})
     {
         QuicStreamLimits l = limits(1U, 0U, 16384U);
@@ -1445,18 +1452,19 @@ TEST_CASE("QUIC stream set: buffers come as streams need them, double up to thei
         Pair pair(l, l);
         u64 id = 0U;
         REQUIRE(pair.end[0].open(true, id) == QuicStreamError::None);
-        // A bidirectional stream's two buffers and their bitmaps: one for the receive buffer, two for the send one.
-        CHECK(pair.end[0].buffer_bytes() == (2U * first) + (3U * quic_stream_bitmap_words(first) * 8U));
-        CHECK(pair.end[0].buffer_allocations() == 2U);
+        CHECK(pair.end[0].buffer_allocations() == 0U); // nothing before the stream has data
         u64 offset = 0U;
-        REQUIRE(write_pattern(pair.end[0], id, offset, 12000U, 7U));
+        REQUIRE(write_pattern(pair.end[0], id, offset, 1U, 7U, false));
+        // The send buffer's first block and its two bitmaps.
+        CHECK(pair.end[0].buffer_bytes() == first + (2U * quic_stream_bitmap_words(first) * 8U));
+        CHECK(pair.end[0].buffer_allocations() == 1U);
+        REQUIRE(write_pattern(pair.end[0], id, offset, 11999U, 7U));
         pair.settle();
         offset = 0U;
         REQUIRE(drain(pair.end[1], id, offset, 7U));
-        // Its send buffer grew to the limit, its receive buffer stayed as it came; whole buffers never grew.
-        const usize send_whole = 16384U + (2U * quic_stream_bitmap_words(16384U) * 8U);
-        CHECK(pair.end[0].buffer_bytes() == send_whole + first + (quic_stream_bitmap_words(first) * 8U));
-        CHECK((pair.end[0].buffer_allocations() > 2U) == (first == 64U));
+        // Its send buffer grew to the limit, and it took no receive buffer (nothing came); whole buffers never grew.
+        CHECK(pair.end[0].buffer_bytes() == 16384U + (2U * quic_stream_bitmap_words(16384U) * 8U));
+        CHECK((pair.end[0].buffer_allocations() > 1U) == (first == 64U));
     }
 }
 

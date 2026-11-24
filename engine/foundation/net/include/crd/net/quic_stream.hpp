@@ -211,13 +211,14 @@ struct QuicBufferStore
 
 // Room in `buffer` for the data to `end` when that is at most `limit` bytes past its read offset (data ending further
 // is left for the buffer to refuse, and takes nothing): lacking the room, the buffer moves into a new block of
-// `store`'s, its capacity doubled until it fits (from one chunk without storage) and at most `limit`, and the old
-// block goes back. `taken` counts the blocks taken. False, changing nothing, when the allocator refuses.
+// `store`'s, its capacity doubled until it fits (from `first` bytes, a multiple of kQuicStreamChunk, without
+// storage) and at most `limit`, and the old block goes back. `taken` counts the blocks taken. False, changing nothing,
+// when the allocator refuses.
 [[nodiscard]] bool quic_hold(memory::IAllocator& allocator, QuicReceiveBuffer& buffer, QuicBufferStore& store, u64 end,
-                             u32 limit, u32& taken) noexcept;
+                             u32 limit, u32& taken, u32 first = static_cast<u32>(kQuicStreamChunk)) noexcept;
 // The same for `more` bytes to write past what `buffer` still owes, at most `limit` in all.
 [[nodiscard]] bool quic_hold(memory::IAllocator& allocator, QuicSendBuffer& buffer, QuicBufferStore& store, u64 more,
-                             u32 limit, u32& taken) noexcept;
+                             u32 limit, u32& taken, u32 first = static_cast<u32>(kQuicStreamChunk)) noexcept;
 
 // The flow-control limit a peer granted this side: a stream's (initial_max_stream_data_* then MAX_STREAM_DATA) or
 // the connection's (initial_max_data then MAX_DATA).

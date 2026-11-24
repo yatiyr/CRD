@@ -594,10 +594,15 @@ void QuicSendBuffer::on_lost(u64 offset, usize length, bool fin) noexcept
 
 namespace
 {
-// The capacity holding `needed` bytes (at most `limit`): `capacity` doubled, from one chunk when it is none.
-[[nodiscard]] u32 grown_capacity(u32 capacity, u64 needed, u32 limit) noexcept
+// The capacity holding `needed` bytes (at most `limit`): `capacity` doubled, from `first` (or `limit` when smaller)
+// when it is none. Both are multiples of kQuicStreamChunk.
+[[nodiscard]] u32 grown_capacity(u32 capacity, u64 needed, u32 limit, u32 first) noexcept
 {
-    u32 size = (capacity != 0U) ? capacity : static_cast<u32>(kQuicStreamChunk);
+    u32 size = capacity;
+    if (size == 0U)
+    {
+        size = (first < limit) ? first : limit;
+    }
     while (size < needed)
     {
         size = (size > limit / 2U) ? limit : size * 2U;
@@ -632,7 +637,7 @@ u64* quic_buffer_block(memory::IAllocator& allocator, usize bytes, usize maps) n
 }
 
 bool quic_hold(memory::IAllocator& allocator, QuicReceiveBuffer& buffer, QuicBufferStore& store, u64 end, u32 limit,
-               u32& taken) noexcept
+               u32& taken, u32 first) noexcept
 {
     const u64 read = buffer.read_offset();
     const u64 needed = (end > read) ? end - read : 0U;
@@ -640,13 +645,13 @@ bool quic_hold(memory::IAllocator& allocator, QuicReceiveBuffer& buffer, QuicBuf
     {
         return true; // held, or refused by the buffer without a block taken for it
     }
-    return regrow(allocator, store, grown_capacity(static_cast<u32>(buffer.capacity()), needed, limit), 1U, taken,
+    return regrow(allocator, store, grown_capacity(static_cast<u32>(buffer.capacity()), needed, limit, first), 1U, taken,
                   [&](cont::Span<u8> bytes, u64* block, usize words)
                   { return buffer.grow(bytes, cont::Span<u64>(block, words)); });
 }
 
 bool quic_hold(memory::IAllocator& allocator, QuicSendBuffer& buffer, QuicBufferStore& store, u64 more, u32 limit,
-               u32& taken) noexcept
+               u32& taken, u32 first) noexcept
 {
     const u64 owed = buffer.written_end() - buffer.acked_end();
     const u64 needed = min_u64(owed + more, limit);
@@ -654,7 +659,7 @@ bool quic_hold(memory::IAllocator& allocator, QuicSendBuffer& buffer, QuicBuffer
     {
         return true;
     }
-    return regrow(allocator, store, grown_capacity(static_cast<u32>(buffer.capacity()), needed, limit), 2U, taken,
+    return regrow(allocator, store, grown_capacity(static_cast<u32>(buffer.capacity()), needed, limit, first), 2U, taken,
                   [&](cont::Span<u8> bytes, u64* block, usize words)
                   { return buffer.grow(bytes, cont::Span<u64>(block, words), cont::Span<u64>(block + words, words)); });
 }

@@ -36,11 +36,12 @@
 //              (RFC 9001 section 4.6.2). A server marks the bytes that came in 0-RTT packets: they are replayable.
 //   events     a per-slot mask of what happened (opened, readable, writable, reset, stop asked, all sent) in a queue
 //              of slots: at most one entry per slot, so it never fills.
-//   memory     the slots come from the injected allocator at init(). A slot's buffers come from it when the slot
-//              first holds a stream, first_bytes each (or the limit when smaller), and double as its data needs them
-//              up to receive_bytes and send_bytes: a receive buffer before it stores data the windows
-//              allow, a send buffer before write() or send_room() would find no room. A slot keeps its buffers for
-//              the streams it holds later, so a steady load allocates nothing. Room the windows granted that the
+//   memory     the slots come from the injected allocator at init(). A slot's buffers come from it when its stream
+//              first has data for them, first_bytes each (or the limit when smaller), and double as its data needs
+//              them up to receive_bytes and send_bytes: a receive buffer before it stores data the windows allow, a
+//              send buffer before write() or send_room() would find no room. A stream that carries no data (a bare
+//              FIN, a reset) takes none. A slot keeps its buffers for the streams it holds later, so a steady load
+//              allocates nothing. Room the windows granted that the
 //              allocator refuses closes the connection (INTERNAL_ERROR); a send buffer that cannot grow takes less.
 //   threads    a stream set belongs to its connection's thread.
 
@@ -78,7 +79,7 @@ struct QuicStreamLimits
     u32 receive_bytes = 0U;
     u32 send_bytes = 0U;
     // A stream buffer's first size (the limit when smaller), doubled as its data needs: a multiple of
-    // kQuicStreamChunk, at most kQuicMaxStreamBuffer. At the limits, a slot's buffers come whole with its first stream.
+    // kQuicStreamChunk, at most kQuicMaxStreamBuffer. At the limits, a slot's buffers come whole with its first data.
     u32 first_bytes = kQuicStreamFirstBytes;
     u32 stream_window = 0U;         // the window first granted on each stream: 1 to receive_bytes
     u64 connection_window = 0U;     // initial_max_data
@@ -98,7 +99,6 @@ enum class QuicStreamError : u8
     Ended,   // the part already ended: finished or reset
     Invalid, // an argument out of range: an urgency, more bytes to consume than peek() gave
     NoPath,  // pin(): the path ID is open in no path slot (not yet opened, or stopped)
-    NoMemory, // open(): the allocator refused a free slot its first buffers
 };
 
 // Which frames a next_frame() or has_frame() call is for: the path slot writing, and whether that slot carries data.
@@ -389,14 +389,9 @@ private:
     [[nodiscard]] Slot* find(u64 id) noexcept;
     [[nodiscard]] const Slot* find(u64 id) const noexcept;
     [[nodiscard]] Lookup reach(u64 id, Slot*& slot, QuicTransportError& error) noexcept;
-    [[nodiscard]] Slot* open_slot(Type& type) noexcept;
+    [[nodiscard]] Slot& open_slot(Type& type) noexcept; // `type` has a free slot
     // Returns everything to the allocator and forgets it.
     void release() noexcept;
-    // Gives a slot of `type` the buffers it lacks, first_bytes each (the limit when smaller): false when the allocator
-    // refused one.
-    [[nodiscard]] bool give_buffers(Store& store, const Type& type) noexcept;
-    // A first block of `bytes` bytes and `maps` bitmaps for them: false when the allocator refuses.
-    [[nodiscard]] bool take_block(QuicBufferStore& store, u32 bytes, usize maps) noexcept;
     // The receive buffer holds data up to `end` (at most its limit), grown when needed: false when the allocator
     // refused.
     [[nodiscard]] bool hold_in(Slot& slot, u64 end) noexcept;

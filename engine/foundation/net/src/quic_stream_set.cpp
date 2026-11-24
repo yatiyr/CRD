@@ -283,52 +283,43 @@ const QuicStreamSet::Slot* QuicStreamSet::find(u64 id) const noexcept
     return (index != kNone) ? &m_slots[index] : nullptr;
 }
 
-QuicStreamSet::Slot* QuicStreamSet::open_slot(Type& type) noexcept
+QuicStreamSet::Slot& QuicStreamSet::open_slot(Type& type) noexcept
 {
-    if (type.free_count == 0U)
-    {
-        return nullptr;
-    }
     const u32 index = type.free[type.free_count - 1U];
-    Store& store = m_stores[index];
-    if (!give_buffers(store, type)) // a slot's first stream gives it its buffers, which it keeps
-    {
-        return nullptr;
-    }
+    const Store& store = m_stores[index];
     --type.free_count;
     Slot& slot = m_slots[index];
-    slot = Slot{};
+    slot = Slot{}; // buffers without storage: the slot's blocks, when an earlier stream took them, or none yet
     slot.id = (type.next << 2U) | static_cast<u64>(&type - m_types);
     slot.active = true;
     if (type.receives)
     {
-        const usize words = quic_stream_bitmap_words(store.in.bytes);
-        static_cast<void>(slot.in.init(cont::Span<u8>(reinterpret_cast<u8*>(store.in.block + words), store.in.bytes),
-                                       cont::Span<u64>(store.in.block, words)));
+        if (store.in.block != nullptr)
+        {
+            const usize words = quic_stream_bitmap_words(store.in.bytes);
+            static_cast<void>(slot.in.init(
+                cont::Span<u8>(reinterpret_cast<u8*>(store.in.block + words), store.in.bytes),
+                cont::Span<u64>(store.in.block, words)));
+        }
         slot.window.reset(m_limits.stream_window, m_limits.receive_bytes);
         slot.recv = QuicRecvState::Recv;
     }
     if (type.sends)
     {
-        const usize words = quic_stream_bitmap_words(store.out.bytes);
-        u64* const block = store.out.block;
-        static_cast<void>(slot.out.init(cont::Span<u8>(reinterpret_cast<u8*>(block + (2U * words)), store.out.bytes),
-                                        cont::Span<u64>(block, words), cont::Span<u64>(block + words, words)));
+        if (store.out.block != nullptr)
+        {
+            const usize words = quic_stream_bitmap_words(store.out.bytes);
+            u64* const block = store.out.block;
+            static_cast<void>(slot.out.init(
+                cont::Span<u8>(reinterpret_cast<u8*>(block + (2U * words)), store.out.bytes),
+                cont::Span<u64>(block, words), cont::Span<u64>(block + words, words)));
+        }
         slot.credit.reset(type.send_credit);
         slot.send = QuicSendState::Ready;
     }
     type.order[type.open++] = index; // IDs of a type open in rising order, so the order stays sorted
     ++type.next;
-    return &slot;
-}
-
-bool QuicStreamSet::give_buffers(Store& store, const Type& type) noexcept
-{
-    const bool in = !type.receives || store.in.block != nullptr ||
-                    take_block(store.in, min_u32(m_limits.first_bytes, m_limits.receive_bytes), 1U);
-    const bool out = !type.sends || store.out.block != nullptr ||
-                     take_block(store.out, min_u32(m_limits.first_bytes, m_limits.send_bytes), 2U);
-    return in && out;
+    return slot;
 }
 
 usize QuicStreamSet::buffer_bytes() const noexcept
@@ -341,25 +332,17 @@ usize QuicStreamSet::buffer_bytes() const noexcept
     return total;
 }
 
-bool QuicStreamSet::take_block(QuicBufferStore& store, u32 bytes, usize maps) noexcept
-{
-    store.block = quic_buffer_block(*m_allocator, bytes, maps);
-    store.bytes = (store.block != nullptr) ? bytes : 0U;
-    m_buffer_allocations += (store.block != nullptr) ? 1U : 0U;
-    return store.block != nullptr;
-}
-
 bool QuicStreamSet::hold_in(Slot& slot, u64 end) noexcept
 {
     return quic_hold(*m_allocator, slot.in, m_stores[index_of(slot)].in, end, m_limits.receive_bytes,
-                     m_buffer_allocations);
+                     m_buffer_allocations, m_limits.first_bytes);
 }
 
 void QuicStreamSet::hold_out(Slot& slot, usize more) noexcept
 {
     // Refused, the buffer takes what fits.
     static_cast<void>(quic_hold(*m_allocator, slot.out, m_stores[index_of(slot)].out, more, m_limits.send_bytes,
-                                m_buffer_allocations));
+                                m_buffer_allocations, m_limits.first_bytes));
 }
 
 QuicStreamSet::Lookup QuicStreamSet::reach(u64 id, Slot*& slot, QuicTransportError& error) noexcept
@@ -390,12 +373,12 @@ QuicStreamSet::Lookup QuicStreamSet::reach(u64 id, Slot*& slot, QuicTransportErr
     // A frame for a higher stream opens every lower one of its type (section 3.2); the grant leaves a slot for each.
     while (type.next <= index)
     {
-        slot = open_slot(type);
-        if (slot == nullptr)
+        if (type.free_count == 0U)
         {
             error = QuicTransportError::InternalError;
             return Lookup::Error;
         }
+        slot = &open_slot(type);
         raise(*slot, kQuicStreamOpened);
     }
     return Lookup::Found;
@@ -1290,12 +1273,7 @@ QuicStreamError QuicStreamSet::open(bool bidirectional, u64& id) noexcept
         }
         return QuicStreamError::Blocked;
     }
-    const Slot* const slot = open_slot(type); // a free slot was checked
-    if (slot == nullptr)
-    {
-        return QuicStreamError::NoMemory;
-    }
-    id = slot->id;
+    id = open_slot(type).id; // a free slot was checked
     return QuicStreamError::None;
 }
 
