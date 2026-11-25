@@ -701,10 +701,10 @@ TEST_CASE("congestion: a flight restarted from nothing in flight paces at one wi
             CHECK(c->pacing_rate(rtt) == at(125U));
         }
     }
-    // A flight the pacer held whose acknowledgements emptied it did not idle on a coarse host (a millisecond's turn
-    // or longer, or one not measured yet): a game polling once a frame sent the initial window a frame. A host
-    // measured finer is one the pacer releases on time, and its emptied flight restarts: the loopback board's
-    // acknowledgement-woken sender waited 162 us a MiB against 126 at 64 KiB windows without the restart.
+    // A flight the pacer held whose acknowledgements emptied it did not idle, on any host's turn: a game polling once
+    // a frame sent the initial window a frame, and a host turning every 500 us over a 100 us path, each turn reading
+    // the whole flight's acknowledgements, was held to 19% of 1 Gbit/s where it fills the link (a restart on a host
+    // measured finer than a millisecond, tried for the loopback board's wall rate, did that).
     for (const u64 turn : {u64{0U}, u64{20000U}, u64{250000U}, kMs, u64{16666667U}})
     {
         for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
@@ -723,10 +723,18 @@ TEST_CASE("congestion: a flight restarted from nothing in flight paces at one wi
             c->on_limited(false, 0U);       // the pacer holds the rest
             c.ack(9U, 0U, 10U * kMs, 10U * kMs, 10U * kMs);
             c.send(10U, 10U, 11U * kMs); // from nothing in flight, the pacer having held it
-            const bool fine = turn != 0U && turn < kMs;
-            CHECK(c->pacing_rate(rtt) == at(fine ? 100U : 125U));
-            CHECK((c->burst(rtt) == congestion_initial_window(policy_of(algorithm), kMss)) == fine);
+            CHECK(c->pacing_rate(rtt) == at(125U));
+            CHECK(c->burst(rtt) > congestion_initial_window(policy_of(algorithm), kMss));
         }
+    }
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        INFO("algorithm " << static_cast<int>(algorithm));
+        constexpr u64 gigabit = 125000000U;
+        crd::net::testing::Flow flow(policy_of(algorithm, true), gigabit, 50000U, 262144U);
+        flow.set_turn(500000U);
+        flow.run(5U * kSecond);
+        CHECK(flow.acked_bytes * 100U >= gigabit * 5U * 95U);
     }
     // Prague paces at its own rate, which a restart does not change.
     const Controller prague(policy_of(CongestionAlgorithm::Prague), kMss, &grown);
