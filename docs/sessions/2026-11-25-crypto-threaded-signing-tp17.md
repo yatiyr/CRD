@@ -35,10 +35,16 @@ the case and `control-copy-slim` included, clean 40 of 40. The 8573C model now h
 
 - `test-repository-tools.py` RegisteredFailures and CiTiers pass, as do the provider driver case,
   `test-diag-coverage.py`, `test-ci-platform.py` and `test-ci-orchestrator.py`. Every repository validator passes.
+- Without the sanitizer, three dispatches at 3f59e200 ran `case,control-copy,control-copy-slim,cerid` in win-asan and
+  win-release. 45584330729 drew no affected runner. 45586029444's 8573C (leg 10) was clean in both trees, which
+  determines nothing. On 45586011023's Xeon 6973P-C (leg 6), win-asan failed `control-copy-slim` 28 of 40 (25
+  refusals, 3 fast exits `0xC0000409`), the case 25 and `cerid` 29, with `control-copy` at 0. In the same rounds,
+  win-release ran all four clean 40 of 40 (slowest 0.08 s). So on that machine a build without AddressSanitizer does
+  not reach it, and TP-17 has a second machine and model.
+- The fast exits are Cerid-free too, but the gate does not admit them, because a crash with no output has no
+  signature.
 
 ## Next
 
-1. Dispatch `provider-threads` with `provider_presets=win-asan,win-release` once GitHub's mirror holds this commit.
-   Record whether win-release reaches it on a leg where win-asan's control refused; otherwise "not determined".
-2. Then stop tracing, by the let-it-be rule. NET-PATH's Remaining follows: acknowledgement evidence sooner after a
-   fall's first flight, then the LEO case hardened on candidate A and the single SipHash draw.
+Tracing stops here, by the let-it-be rule. NET-PATH's Remaining follows: acknowledgement evidence sooner after a
+fall's first flight, then the LEO case hardened on candidate A and the single SipHash draw.
