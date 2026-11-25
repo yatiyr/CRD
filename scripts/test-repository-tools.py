@@ -27,6 +27,7 @@ import threading
 import time
 import tomllib
 import xml.etree.ElementTree as ET
+import xml.sax.saxutils
 import unittest
 import urllib.error
 import urllib.parse
@@ -744,9 +745,13 @@ class RegisteredFailures(unittest.TestCase):
 
     @staticmethod
     def junit_text(states):
+        # A state is 'passed', 'failed' or 'skipped', or a (state, output) pair whose output is the system-out text.
         cases = []
         for name, state in states.items():
+            state, output = state if isinstance(state, tuple) else (state, '')
             child = {'passed': '', 'failed': '<failure message="x"/>', 'skipped': '<skipped message="s"/>'}[state]
+            if output:
+                child += f'<system-out>{xml.sax.saxutils.escape(output)}</system-out>'
             status = {'passed': 'run', 'failed': 'fail', 'skipped': 'notrun'}[state]
             cases.append(f'<testcase name="{name}" classname="{name}" time="0" status="{status}">{child}</testcase>')
         return '<?xml version="1.0"?><testsuite name="s" tests="%d">%s</testsuite>' % (len(states), ''.join(cases))
@@ -840,6 +845,79 @@ class RegisteredFailures(unittest.TestCase):
                 self.assertEqual(gate.main(['--register', str(register), '--lane', 'win-asan', '--junit', str(junit),
                                             '--selection', str(register), '--lane-inventory', lane]), 2)
 
+    REFUSED = r'FAILED:\s+CHECK\( sign \)\s+with message:\s+refused after \d{4,} ms'
+    SIGNED = {'win-asan': [{'test': 'A (DX12)', 'defect': 'TP-1'},
+                           {'test': 'S', 'defect': 'TP-2', 'signature': REFUSED, 'intermittent': True}]}
+    REFUSAL = 'Filters: "S"\nx.cpp(10): FAILED:\n  CHECK( sign )\nwith message:\n  refused after 11266 ms\n'
+
+    def test_an_intermittent_entry_passes_or_fails_with_its_signature_and_never_skips(self):
+        # TP-17's shape: the Cerid-free reproduction fails only on some runs, so the lane may pass the test; a
+        # failure must be the registered one, and a skip or absence is still red.
+        for state in ('passed', ('failed', self.REFUSAL), ('failed', self.REFUSAL * 2)):
+            code, lines = self.gate(self.SIGNED, 'win-asan', {'A (DX12)': 'failed', 'S': state, 'C': 'passed'}, 8)
+            self.assertEqual(code, 0, lines)
+            self.assertTrue(lines[-1].startswith('gate: PASS'), lines)
+        self.assertTrue(any(line.endswith(' S (intermittent)') for line in lines), lines)
+        self.assertEqual(self.gate(self.SIGNED, 'win-asan', {'A (DX12)': 'failed', 'S': 'passed'}, 8)[0], 0)
+        other = self.REFUSAL + 'x.cpp(11): FAILED:\n  CHECK( verified )\n'
+        for output in ('', 'x.cpp(10): FAILED:\n  CHECK( sign )\nwith message:\n  refused after 12 ms\n', other,
+                       self.REFUSAL + '==4242==ERROR: AddressSanitizer: stack-buffer-overflow\n'):
+            code, lines = self.gate(self.SIGNED, 'win-asan', {'A (DX12)': 'failed', 'S': ('failed', output)}, 8)
+            self.assertEqual(code, 1, (output, lines))
+            self.assertIn("  UNEXPECTED FAILURE: S (the output does not hold TP-2's signature)", lines)
+        for states in ({'A (DX12)': 'failed', 'S': 'skipped'}, {'A (DX12)': 'failed'}):
+            code, lines = self.gate(self.SIGNED, 'win-asan', states, 8)
+            self.assertEqual(code, 1, lines)
+            self.assertTrue(any('registered TP-2 did not fail: S' in line for line in lines), lines)
+        # A signed entry that is not intermittent must fail, and with its signature.
+        steady = {'win-asan': [{'test': 'S', 'defect': 'TP-2', 'signature': self.REFUSED}]}
+        self.assertEqual(self.gate(steady, 'win-asan', {'S': ('failed', self.REFUSAL)}, 8)[0], 0)
+        self.assertEqual(self.gate(steady, 'win-asan', {'S': 'passed'}, 0)[0], 1)
+        self.assertEqual(self.gate(steady, 'win-asan', {'S': ('failed', 'Filters: "S"\n')}, 8)[0], 1)
+
+    def test_signatures_read_the_junit_failure_and_output_and_are_validated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            junit = Path(temp) / 'ctest.xml'
+            junit.write_text('<testsuite><testcase name="S" status="fail"><failure message="Failed">trace</failure>'
+                             '<system-out>out</system-out></testcase><testcase name="T" status="run"/></testsuite>',
+                             encoding='utf-8')
+            results = gate.junit_results(junit)
+            self.assertEqual(results['S'], gate.Result('failed', 'Failed\ntrace\nout'))
+            self.assertEqual(results['T'], gate.Result('passed', ''))
+            path = Path(temp) / 'register.md'
+            for entry, message in (({'test': 'S', 'defect': 'TP-1', 'intermittent': True}, 'needs a "signature"'),
+                                   ({'test': 'S', 'defect': 'TP-1', 'signature': 'x', 'intermittent': False},
+                                    '"intermittent" is true or absent'),
+                                   ({'test': 'S', 'defect': 'TP-1', 'signature': ' '}, 'empty signature'),
+                                   ({'test': 'S', 'defect': 'TP-1', 'signature': '(x'}, 'does not compile'),
+                                   ({'test': 'S', 'defect': 'TP-1', 'note': 'x'}, 'may carry')):
+                path.write_text(self.register_text({'win-asan': [entry]}), encoding='utf-8')
+                with self.assertRaisesRegex(gate.RegisterError, message):
+                    gate.load_register(path)
+
+    def test_tp17_signature_holds_the_hosted_refusal_and_nothing_else(self):
+        # The fourth sighting's report (push run 45496952342, win-asan shard 1), Catch2 wrapping the message at 80
+        # columns, and the same refusal wrapped elsewhere; a refusal under 5 s, a refused second signing, a signature
+        # that did not verify and a fast exit with no report are not TP-17.
+        entry = gate.registered(gate.load_register(ROOT / 'docs/third-party-defects.md'), 'win-asan')[
+            'Provider: one verifier and one key serve several threads']
+        self.assertEqual((entry['defect'], entry['intermittent']), ('TP-17', True))
+        head = ('Filters: "Provider: one verifier and one key serve several threads"\n'
+                'D:\\a\\CRD\\CRD\\tests\\foundation\\crypto\\test_provider.cpp(1000): FAILED:\n'
+                '  CHECK( static_cast<int>(fault.signing) == static_cast<int>(CryptoError::None) )\n'
+                'with expansion:\n  9 == 0\nwith message:\n')
+        hosted = head + ('  iteration 0, at once again 0, signing refused after 11266 ms, signing again\n  at once 0\n'
+                         '\n=====\ntest cases:  1 | 1 failed\nassertions: 10 | 9 passed | 1 failed\n')
+        self.assertTrue(gate.signature_holds(entry, hosted))
+        self.assertTrue(gate.signature_holds(entry, hosted + hosted.replace(
+            'signing again\n  at once 0', 'signing\n  again at once 0').replace('11266', '22408')))
+        verify = (head.replace('fault.signing) == static_cast<int>(CryptoError::None)',
+                               'fault.checked) == static_cast<int>(Verification::Valid)').replace('9 == 0', '1 == 0')
+                  + '  iteration 3, at once again 0, signing refused after 0 ms, signing again at once 0\n')
+        for output in (hosted.replace('11266', '4999'), hosted.replace('at once 0\n', 'at once 9\n'),
+                       hosted.replace('9 == 0', '2 == 0'), hosted + verify, verify, ''):
+            self.assertFalse(gate.signature_holds(entry, output), output)
+
     def test_lane_without_entries_requires_zero_failures_and_propagates_ctest_exit(self):
         self.assertEqual(self.gate(self.LANES, 'win-debug', {'A (DX12)': 'passed'}, 0)[0], 0)
         self.assertEqual(self.gate(self.LANES, 'win-debug', {'A (DX12)': 'passed'}, 3)[0], 3)
@@ -865,6 +943,7 @@ class RegisteredFailures(unittest.TestCase):
                 gate.junit_results(junit)
         real = gate.load_register(ROOT / 'docs/third-party-defects.md')
         self.assertEqual({entry['defect'] for entry in real['lanes']['linux-gcc-asan']}, {'TP-5'})
+        self.assertEqual({entry['defect'] for entry in real['lanes']['win-asan']}, {'TP-17'})
         presets = {p['name'] for p in json.loads((ROOT / 'CMakePresets.json').read_text(encoding='utf-8'))['configurePresets']}
         self.assertTrue(set(real['lanes']) <= presets, set(real['lanes']) - presets)
 
@@ -5547,18 +5626,32 @@ class TestInstruments(unittest.TestCase):
             quick = [sys.executable, '-c', 'print("result: clean")']
             slow = [sys.executable, '-c', 'import time; time.sleep(5.3); print("All tests passed")']
             failing = [sys.executable, '-c', 'import sys; print(sys.argv[1]); sys.exit(1)', fault]
-            records = provider_host_check.run_batch([('case', slow), ('control', quick), ('control', failing)],
-                                                    scratch, 'contended', 3)
-            self.assertEqual([entry['event'] for entry in records], [None, None, 'exit 1'])
-            self.assertEqual([entry['stall'] for entry in records], [True, False, False])
+            records = provider_host_check.run_batch([('win-asan', 'case', slow), ('win-asan', 'control', quick),
+                                                     ('win-asan', 'control', failing),
+                                                     ('win-release', 'control', quick)], scratch, 'contended', 3)
+            self.assertEqual([entry['event'] for entry in records], [None, None, 'exit 1', None])
+            self.assertEqual([entry['stall'] for entry in records], [True, False, False, False])
             self.assertLess(records[1]['wall_seconds'], 5.0)
             self.assertEqual(records[2]['round'], 3)
             self.assertTrue(Path(records[2]['log']).is_file())
-            self.assertEqual(sorted(path.name for path in scratch.iterdir()), ['control-contended-3-2.log'])
-            rows = provider_host_check.tally(records)
-            self.assertEqual([(row['arm'], row['phase']) for row in rows],
-                             [('case', 'contended'), ('control', 'contended')])
-            self.assertEqual((rows[0]['runs'], rows[0]['stalls'], rows[1]['runs'], rows[1]['events']), (1, 1, 2, 1))
+            self.assertEqual(sorted(path.name for path in scratch.iterdir()), ['win-asan-control-contended-3-2.log'])
+            # Each tree is tallied apart, in the order its runs came, so a same-machine clean tree reads against a
+            # failing one.
+            rows = provider_host_check.tally(list(reversed(records)))
+            self.assertEqual([(row['tree'], row['arm'], row['phase']) for row in rows],
+                             [('win-release', 'control', 'contended'), ('win-asan', 'case', 'contended'),
+                              ('win-asan', 'control', 'contended')])
+            self.assertEqual((rows[1]['runs'], rows[1]['stalls'], rows[2]['runs'], rows[2]['events'],
+                              rows[0]['runs'], rows[0]['events']), (1, 1, 2, 1, 1, 0))
+            text = provider_host_check.markdown({'cpu': 'Xeon', 'logical_cpus': 4, 'system': 'Windows',
+                                                 'compilers': {'win-asan': 'MSVC 19.52', 'win-release': 'MSVC 19.52'}},
+                                                1, 0, records)
+            self.assertIn('trees win-asan (MSVC 19.52), win-release (MSVC 19.52)', text)
+            self.assertIn('| win-release | control | contended | 1 | 0 | 0 |', text)
+            self.assertIn('### win-asan control, round 3 (contended): exit 1', text)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                provider_host_check.main(['--build', 'build/a/win-asan', '--build', 'build/b/win-asan',
+                                          '--scratch', str(scratch)])
             self.assertEqual([arm[0] for arm in provider_host_check.ARMS],
                              ['case', 'case-ctest', 'control', 'control-gate', 'control-storage', 'control-gate-storage',
                               'control-copy', 'control-copy-slim', 'control-copy-shift-1k', 'control-copy-shift-2k',

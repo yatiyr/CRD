@@ -8,12 +8,19 @@ run, and a CTest error without a matching failure all fail the gate. Lanes witho
 propagate CTest's own exit code, so the gate never masks a CTest problem. Nothing is suppressed, filtered or skipped:
 the tests run and the sanitizer stays strict; only the lane verdict consults the register.
 
+An entry may carry a "signature", a regular expression its failing test's output (the JUnit failure and system-out)
+must hold, with no failure report (Catch2's "FAILED:", a sanitizer's "==pid==ERROR") outside its matches: any other
+failure of that test is unexpected. An "intermittent" entry (it requires a signature) is a defect whose Cerid-free
+reproduction fails only on some runs: its test may pass or fail with the signature, but a skip or an absence still
+fails the gate. A pass cannot retire it; the entry names the Cerid-free check whose clean runs do.
+
 A lane split into shards (docs/design/ci-tiers.md#parallelism-and-shards) gates each shard on the registered tests
 its own inventory selects, after checking that every registered test is in the lane's inventory: the shards'
 inventories partition the lane's, so the shards' gates together hold the whole lane to its register.
 """
 from pathlib import Path
 import argparse
+import collections
 import json
 import re
 import sys
@@ -23,6 +30,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTER = ROOT / 'docs/third-party-defects.md'
 MARKER = '<!-- registered-failures -->'
 DEFECT_ID = re.compile(r'^TP-[0-9]+$')
+ENTRY_KEYS = {'test', 'defect', 'signature', 'intermittent'}
+FAILURE_REPORT = re.compile(r'FAILED:|==[0-9]+==ERROR')
+Result = collections.namedtuple('Result', 'state output')
 
 
 class RegisterError(ValueError):
@@ -30,7 +40,8 @@ class RegisterError(ValueError):
 
 
 def load_register(path):
-    """Return the parsed register: {'lanes': {lane: [{'test': name, 'defect': 'TP-n'}, ...]}}."""
+    """Return the parsed register: {'lanes': {lane: [{'test': name, 'defect': 'TP-n'[, 'signature': regex]
+    [, 'intermittent': true]}, ...]}}."""
     text = Path(path).read_text(encoding='utf-8')
     if text.count(MARKER) != 1:
         raise RegisterError(f'{path}: expected exactly one {MARKER} marker')
@@ -51,27 +62,57 @@ def load_register(path):
             raise RegisterError(f'{path}: lane keys must be strings and their values lists')
         names = []
         for entry in entries:
-            if not isinstance(entry, dict) or set(entry) != {'test', 'defect'}:
-                raise RegisterError(f'{path}: lane {lane}: entries carry exactly "test" and "defect"')
+            if not isinstance(entry, dict) or not {'test', 'defect'} <= set(entry) <= ENTRY_KEYS:
+                raise RegisterError(f'{path}: lane {lane}: entries carry "test" and "defect", and may carry '
+                                    '"signature" and "intermittent"')
             if not isinstance(entry['test'], str) or not entry['test'].strip():
                 raise RegisterError(f'{path}: lane {lane}: empty test name')
             if not isinstance(entry['defect'], str) or not DEFECT_ID.match(entry['defect']):
                 raise RegisterError(f'{path}: lane {lane}: defect ids look like TP-1')
             if entry['defect'].lower() not in anchors:
                 raise RegisterError(f'{path}: lane {lane}: {entry["defect"]} has no <a id="{entry["defect"].lower()}"> entry')
+            check_signature(path, lane, entry)
             names.append(entry['test'])
         if len(names) != len(set(names)):
             raise RegisterError(f'{path}: lane {lane}: duplicate test names')
     return data
 
 
+def check_signature(path, lane, entry):
+    """Refuse a signature that is empty or does not compile, and an intermittent entry without one."""
+    if 'intermittent' in entry and entry['intermittent'] is not True:
+        raise RegisterError(f'{path}: lane {lane}: "intermittent" is true or absent: {entry["test"]}')
+    if 'signature' not in entry:
+        if 'intermittent' in entry:
+            raise RegisterError(f'{path}: lane {lane}: an intermittent entry needs a "signature": {entry["test"]}')
+        return
+    if not isinstance(entry['signature'], str) or not entry['signature'].strip():
+        raise RegisterError(f'{path}: lane {lane}: empty signature: {entry["test"]}')
+    try:
+        re.compile(entry['signature'])
+    except re.error as error:
+        raise RegisterError(f'{path}: lane {lane}: signature does not compile ({error}): {entry["test"]}') from error
+
+
 def registered(register, lane):
-    """Map registered test name -> defect id for one lane (empty for lanes without entries)."""
-    return {entry['test']: entry['defect'] for entry in register['lanes'].get(lane, [])}
+    """Map registered test name -> its entry for one lane (empty for lanes without entries)."""
+    return {entry['test']: entry for entry in register['lanes'].get(lane, [])}
+
+
+def signature_holds(entry, output):
+    """Whether a failing registered test's output is its entry's failure: always without a signature; with one, at
+    least one match and no failure report outside the matches."""
+    if 'signature' not in entry:
+        return True
+    pattern = re.compile(entry['signature'])
+    if pattern.search(output) is None:
+        return False
+    return FAILURE_REPORT.search(pattern.sub('', output)) is None
 
 
 def junit_results(path):
-    """Map CTest test name -> 'passed' | 'failed' | 'skipped' from a CTest --output-junit document."""
+    """Map CTest test name -> Result(state, output) from a CTest --output-junit document: the state is 'passed',
+    'failed' or 'skipped', the output the failure's message and text and the system-out text."""
     try:
         tree = ET.parse(path)
     except (OSError, ET.ParseError) as error:
@@ -82,11 +123,16 @@ def junit_results(path):
         if not name or name in results:
             raise RegisterError('JUnit evidence has a missing or duplicate test name')
         if case.find('skipped') is not None or case.get('status') in {'notrun', 'disabled'}:
-            results[name] = 'skipped'
+            state = 'skipped'
         elif case.find('failure') is not None or case.find('error') is not None or case.get('status') == 'fail':
-            results[name] = 'failed'
+            state = 'failed'
         else:
-            results[name] = 'passed'
+            state = 'passed'
+        output = []
+        for child in case:
+            if child.tag in {'failure', 'error', 'system-out', 'system-err'}:
+                output += [child.get('message') or '', child.text or '']
+        results[name] = Result(state, '\n'.join(part for part in output if part))
     if not results:
         raise RegisterError('Zero CTest results cannot qualify a lane')
     return results
@@ -104,30 +150,39 @@ def inventory_names(path):
 def shard_share(expected, selection, lane):
     """The registered tests one shard must see fail, and a report line for each one no shard can run."""
     outside = sorted(name for name in expected if name not in lane)
-    lines = [f'  UNEXPECTED ABSENT: registered {expected[name]} is not in the lane inventory: {name}'
+    lines = [f'  UNEXPECTED ABSENT: registered {expected[name]["defect"]} is not in the lane inventory: {name}'
              for name in outside]
-    return {name: defect for name, defect in expected.items() if name in selection}, lines
+    return {name: entry for name, entry in expected.items() if name in selection}, lines
 
 
 def evaluate(expected, results, ctest_exit, absent=()):
-    """Return (exit_code, report_lines). Exit 0 only when the failing set equals the registered set."""
-    failed = {name for name, state in results.items() if state == 'failed'}
+    """Return (exit_code, report_lines). Exit 0 only when the failing set equals the registered set, less the
+    intermittent entries' tests that passed, and each registered failure holds its entry's signature."""
+    states = {name: result.state for name, result in results.items()}
+    failed = {name for name, state in states.items() if state == 'failed'}
     # A test that exits with its declared skip code (a capability the lane lacks, e.g. no GPU device) is counted
     # apart: it is neither a pass nor a failure, so the report shows it rather than folding it into the results.
-    skipped = sum(1 for state in results.values() if state == 'skipped')
+    skipped = sum(1 for state in states.values() if state == 'skipped')
     unexpected = sorted(failed - set(expected))
-    not_failing = sorted(name for name in expected if results.get(name) != 'failed')
+    foreign = sorted(name for name in failed & set(expected)
+                     if not signature_holds(expected[name], results[name].output))
+    not_failing = sorted(name for name, entry in expected.items() if states.get(name) != 'failed'
+                         and not (entry.get('intermittent') and states.get(name) == 'passed'))
     lines = [f'registered failures for this lane: {len(expected)}; observed failures: {len(failed)}; '
              f'skipped: {skipped}; results: {len(results)}; ctest exit: {ctest_exit}']
     for name in sorted(expected):
-        state = results.get(name, 'absent')
-        lines.append(f'  registered {expected[name]}: {state:7s} {name}')
+        kind = ' (intermittent)' if expected[name].get('intermittent') else ''
+        lines.append(f'  registered {expected[name]["defect"]}: {states.get(name, "absent"):7s} {name}{kind}')
     for name in unexpected:
         lines.append(f'  UNEXPECTED FAILURE: {name}')
+    for name in foreign:
+        lines.append(f'  UNEXPECTED FAILURE: {name} (the output does not hold {expected[name]["defect"]}\'s '
+                     'signature)')
     for name in not_failing:
-        lines.append(f'  UNEXPECTED {results.get(name, "absent").upper()}: registered {expected[name]} did not fail: {name}')
+        lines.append(f'  UNEXPECTED {states.get(name, "absent").upper()}: registered {expected[name]["defect"]} '
+                     f'did not fail: {name}')
     lines += absent
-    if unexpected or not_failing or absent:
+    if unexpected or foreign or not_failing or absent:
         lines.append('gate: FAIL (the failing set differs from the register; fix the defect, or retire the entry)')
         return 1, lines
     if not expected:

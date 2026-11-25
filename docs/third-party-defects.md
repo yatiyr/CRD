@@ -24,6 +24,13 @@ require zero failures and propagate CTest's exit code.
 Each entry names the ROADMAP row that closed with this register as its evidence. An entry never widens by itself:
 adding a test name is a documented decision with a reproduction, like the entry it joins.
 
+A registered test may also carry a signature: the failure its output must show, with no other failure report beside
+it, so any other failure of that test is unexpected. A defect whose Cerid-free reproduction fails only on some runs
+(a timing or machine condition the lane cannot hold) is an **intermittent** entry: it requires a signature, its test
+may pass or fail with exactly that signature, and a skip or an absence still fails the gate. A passing lane cannot
+force it out, so its retirement trigger names the Cerid-free check whose clean runs retire it, and when that check
+is re-run.
+
 ## Registered failures
 
 Lane keys are the CI preset names; test names are exact CTest names. The gate reads this block.
@@ -34,6 +41,9 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
   "lanes": {
     "linux-gcc-asan": [
       {"test": "assetio: OUR tangents vs the REFERENCE mikktspace.c ORACLE", "defect": "TP-5"}
+    ],
+    "win-asan": [
+      {"test": "Provider: one verifier and one key serve several threads", "defect": "TP-17", "intermittent": true, "signature": "FAILED:\\s+CHECK\\( static_cast<int>\\(fault\\.signing\\) == static_cast<int>\\(CryptoError::None\\) \\)\\s+with expansion:\\s+9 == 0\\s+with message:\\s+iteration\\s+\\d+,\\s+at\\s+once\\s+again\\s+0,\\s+signing\\s+refused\\s+after\\s+(?:[5-9]\\d{3}|\\d{5,})\\s+ms,\\s+signing\\s+again\\s+at\\s+once\\s+0\\b"}
     ]
   }
 }
@@ -251,11 +261,25 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | When a pinned msquic builds clean over OpenSSL 4, the flag and this entry go |
 | Row | [NET-PATH](ROADMAP.md#slice-net-path); evidence [the msquic interop session](sessions/2026-11-23-net-path-msquic-interop.md) |
 
+<a id="tp-17"></a>
+## TP-17: AWS-LC refuses a thread's first ML-DSA-65 signing on some Xeon runners under win-asan
+
+| Field | Value |
+|---|---|
+| Component | AWS-LC 5.12.0 (`cmake/pins.json` `aws-lc`), its ML-DSA-65 signing (mldsa-native), built by the `win-asan` preset (MSVC 19.52, AddressSanitizer) |
+| Symptom | Four threads sign with one ML-DSA-65 key; a thread's first `EVP_DigestSign` returns 0 ("provider internal error") after 9.5 to 22.4 s, and a second signing at once succeeds. The refusal fits mldsa-native's rejection loop run to its bound, 13,106 attempts for ML-DSA-65 |
+| Reproduction outside Cerid | `crd-mldsa-threads-control copy slim` ([control](../tests/foundation/crypto/control)), which links only AWS-LC: host check [45562483404](https://github.com/yatiyr/CRD/actions/runs/45562483404) at `94e5783e`, leg 8, a Xeon Platinum 8573C, refused 22 of 40 runs (slowest 16.95 s) beside the case's 28 of 40. On that machine `control-copy` (3,309-byte in-object signature array), the same shifted 1, 2 and 3 KiB down the stack, a crd-crypto session padded with the same bytes and the case with 512 KiB of each thread's stack touched first by code AddressSanitizer does not instrument were clean 40 of 40 each. The trigger is a thread's first touch of new stack pages at that layout, not their shadow. It follows the machine as well as the model: the other three 8573C legs of that dispatch, and the one of [45579952691](https://github.com/yatiyr/CRD/actions/runs/45579952691) at `ead0f6c1`, ran every arm clean 40 of 40. The trace is [here](sessions/2026-11-25-crypto-threaded-signing-layout-arms.md) |
+| Affected | `win-asan`, hosted only: `Provider: one verifier and one key serve several threads` (crd-crypto-tests), four push-run sightings from 2026-11-04 to 2026-11-24. Never on another lane, on AMD EPYC or Ice Lake runners or on the workstation. Whether a build without AddressSanitizer reaches it is open: the provider-threads legs run win-asan beside win-release on one machine, read only where win-asan's control fails on that leg |
+| Engine handling | None needed: `SigningKey::sign` fails closed with `ProviderFailure` and no signature, and every signature the case receives verifies. The case runs unchanged on every lane; on `win-asan` it is an intermittent entry whose signature is exactly the refusal (`9 == 0`, ProviderFailure, after at least 5 s, a second signing at once succeeding). A signature that does not verify, a refused second signing, a fast exit or a sanitizer report stays unexpected |
+| Retirement | When `control-copy-slim` runs clean 40 of 40 on ten affected `provider-threads` legs (a Xeon Platinum 85xx or a Xeon 6; one machine in four of that model reproduced it), across as many dispatches as that takes, the entry and its signature go. Re-run after each AWS-LC pin or `windows-2025` image change |
+| Row | [NET.2](ROADMAP.md#slice-net.2); evidence [the register session](sessions/2026-11-25-crypto-threaded-signing-tp17.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads
 this document's block and the lane's JUnit output. Exit 0 means the failing set equals the registered set for that
-lane (or, for a lane without entries, that nothing failed and CTest exited 0). Exit 1 names every unexpected failure
-and every registered test that did not fail; exit 2 means the register or the JUnit evidence is unusable; any other
+lane (or, for a lane without entries, that nothing failed and CTest exited 0), less an intermittent entry's test that
+passed, and that each registered failure holds its entry's signature. Exit 1 names every unexpected failure (a
+registered test whose output lacks its signature included) and every registered test that did not fail; exit 2 means the register or the JUnit evidence is unusable; any other
 code is CTest's own, propagated. The Windows matrix job runs it as the last line of its Test step, after the census
 probe and the full CTest run. Unit tests live in `scripts/test-repository-tools.py`.

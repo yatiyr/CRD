@@ -12,8 +12,8 @@ name: Host check
 # legs (REPO.3) run the pinned Windows installer under candidate options, one fresh machine per arm, and judge them;
 # the emitter leg runs it under the debugger to name the caller of its QFont warning. The UDP ring leg (NET-PATH)
 # records the step and errno at which a hosted linux-gcc-asan machine refuses an io_uring receive ring, and its limits.
-# The provider-threads legs (NET.2) split win-asan's threaded ML-DSA-65 signing refusal between AWS-LC, crd-crypto and
-# the test program.
+# The provider-threads legs (NET.2) split win-asan's threaded ML-DSA-65 signing refusal (TP-17) between AWS-LC,
+# crd-crypto and the test program, and run its Cerid-free control for TP-17's retirement.
 on:
   workflow_dispatch:
     inputs:
@@ -52,6 +52,10 @@ on:
         description: 'provider-threads arms, comma-separated (empty: every arm of scripts/provider-host-check.py)'
         type: string
         default: ''
+      provider_presets:
+        description: 'provider-threads trees, comma-separated, each arm run in each (win-asan, win-debug, win-release)'
+        type: string
+        default: 'win-asan'
 
 permissions:
   contents: read
@@ -651,11 +655,12 @@ jobs:
 
   provider-threads:
     # NET.2: on hosted win-asan, four threads signing with one ML-DSA-65 key have had a thread's first signing refused
-    # after 11 to 19 s, a second signing at once succeeding (nonreproduced register,
-    # win-asan-ml-dsa-threaded-signing-refused). Each leg builds the case and the programs that split it on win-asan: its
-    # Cerid-free control (the same provider calls through the tree's AWS-LC alone) and the case through crd-crypto
-    # without the test program (tests/foundation/crypto/control), and runs them in fresh processes
-    # (scripts/provider-host-check.py). The case has failed only on Emerald and Granite Rapids Xeon runners
+    # after 10 to 22 s, a second signing at once succeeding (TP-17, docs/third-party-defects.md). Each leg builds the
+    # case and the programs that split it in each provider_presets tree: its Cerid-free control (the same provider
+    # calls through the tree's AWS-LC alone) and the case through crd-crypto without the test program
+    # (tests/foundation/crypto/control), and runs every arm in every tree in fresh processes on the one machine
+    # (scripts/provider-host-check.py), so a tree without the sanitizer reads against win-asan's control on the same
+    # leg. The case has failed only on Emerald and Granite Rapids Xeon runners
     # (8573C, 6973P-C) and passed on Ice Lake (8370C) and AMD EPYC ones (7763, 9V45, 9V74), and the runner's CPU is
     # drawn per job: ten legs, each of which reads its CPU first and stops at once on a CPU outside provider_cpu
     # (affected: a Xeon Platinum 84xx or 85xx or a Xeon 6, Sapphire Rapids on; intel: any Intel CPU; any).
@@ -742,11 +747,29 @@ jobs:
 
       - name: Configure
         if: steps.cpu.outputs.run == 'true'
-        run: cmake --preset win-asan
+        shell: pwsh
+        env:
+          PRESETS: ${{ inputs.provider_presets }}
+        run: |
+          $presets = @($env:PRESETS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          if ($presets.Count -eq 0) { throw 'provider_presets names no tree' }
+          foreach ($preset in $presets)
+          {
+            if ($preset -notmatch '^win-(asan|debug|release)$') { throw "provider_presets: not a tree: $preset" }
+            cmake --preset $preset
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          "PROVIDER_PRESETS=$($presets -join ',')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build the case and the programs that split it
         if: steps.cpu.outputs.run == 'true'
-        run: cmake --build --preset win-asan --target crd-crypto-tests crd-mldsa-threads-control crd-mldsa-threads-cerid
+        shell: pwsh
+        run: |
+          foreach ($preset in $env:PROVIDER_PRESETS -split ',')
+          {
+            cmake --build --preset $preset --target crd-crypto-tests crd-mldsa-threads-control crd-mldsa-threads-cerid
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Rounds
         if: steps.cpu.outputs.run == 'true'
@@ -759,7 +782,8 @@ jobs:
         run: |
           $evidence = "$env:RUNNER_TEMP\host-check\evidence"
           New-Item -ItemType Directory -Force $evidence | Out-Null
-          python scripts/provider-host-check.py --build build/win-asan --rounds $env:ROUNDS --parallel $env:PARALLEL `
+          $trees = foreach ($preset in $env:PROVIDER_PRESETS -split ',') { '--build'; "build/$preset" }
+          python scripts/provider-host-check.py @trees --rounds $env:ROUNDS --parallel $env:PARALLEL `
             --arms="$env:ARMS" `
             --scratch "$env:RUNNER_TEMP\host-check\work" --json "$evidence\host-check-provider-$env:LEG.json" `
             --summary "$env:GITHUB_STEP_SUMMARY"

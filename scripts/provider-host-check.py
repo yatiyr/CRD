@@ -3,9 +3,8 @@
 
 Contract: docs/design/test-instruments.md (host separation). On hosted win-asan, four threads signing with one ML-DSA-65
 SigningKey have had a thread's first signing refused (ProviderFailure) after 10 to 19 s, a second signing at once
-succeeding, while the case passes in about 1 s (the nonreproduced register's
-win-asan-ml-dsa-threaded-signing-refused). This driver splits the refusal between AWS-LC, crd-crypto and the test
-program. Every round runs each arm once alone, in a fresh process (every sighting was a thread's first signing): the
+succeeding, while the case passes in about 1 s (TP-17 in docs/third-party-defects.md, whose retirement this driver's
+control-copy-slim arm reads). This driver splits the refusal between AWS-LC, crd-crypto and the test program. Every round runs each arm once alone, in a fresh process (every sighting was a thread's first signing): the
 case from crd-crypto-tests, directly and through CTest (as the lane runs it); crd-mldsa-threads-control, the same
 provider calls through the same tree's AWS-LC alone, plain, with its threads' first signings released together (gate)
 with the case's storage (storage), with SigningKey::sign's and ProviderVerifier::verify's calls exactly (copy), and
@@ -16,13 +15,15 @@ plain, gated, warmed by one signing on the main thread (warm), with its signatur
 raw session's in-object signature bytes (pad), with each thread's stack touched before its first signing (touch) or
 touched by uninstrumented code, its AddressSanitizer shadow untouched (touch-stack), and the control's raw AWS-LC calls
 made inside it (raw): plain, as SigningKey::sign's exact calls written in the program (raw-copy) and verified by
-ProviderVerifier (raw-crd-verify). --arms runs only the named arms. With --parallel N a round then runs N processes at
-once, the arms in turn, as CTest's parallel jobs load the lane. An event is a nonzero exit, a timeout or a missing pass
-line; a stall is a run over STALL_SECONDS, counted apart. The driver exits 1 when any run had an event. It builds
+ProviderVerifier (raw-crd-verify). --arms runs only the named arms. Each --build names a tree; with several (win-asan
+beside a tree without the sanitizer) every round runs each arm in each tree in turn on the same machine, so a tree's
+clean arm reads against another tree's failing one. With --parallel N a round then runs N processes at once, the
+(tree, arm) pairs in turn, as CTest's parallel jobs load the lane. An event is a nonzero exit, a timeout or a missing
+pass line; a stall is a run over STALL_SECONDS, counted apart. The driver exits 1 when any run had an event. It builds
 nothing.
 
-    python scripts/provider-host-check.py --build build/win-asan --rounds 40 --scratch <dir> --json <file> \
-        [--arms case,cerid,cerid-raw] --summary "$GITHUB_STEP_SUMMARY"
+    python scripts/provider-host-check.py --build build/win-asan [--build build/win-release] --rounds 40 \
+        --scratch <dir> --json <file> [--arms case,cerid,cerid-raw] --summary "$GITHUB_STEP_SUMMARY"
 """
 import argparse
 import json
@@ -96,25 +97,26 @@ def slowest_first_signing(output):
     return max(times) if times else None
 
 
-def record(arm, phase, round_index, exit_code, output, wall, timed_out, log):
+def record(tree, arm, phase, round_index, exit_code, output, wall, timed_out, log):
     """One run's record; a run without an event keeps no log."""
     pass_line = next(line for name, _, _, line in ARMS if name == arm)
     event = classify(exit_code, output, pass_line, timed_out)
     if event is None:
         Path(log).unlink(missing_ok=True)
-    return {'arm': arm, 'phase': phase, 'round': round_index, 'exit_code': exit_code, 'wall_seconds': wall,
-            'stall': wall > STALL_SECONDS, 'first_signing_ms': slowest_first_signing(output), 'event': event,
+    return {'tree': tree, 'arm': arm, 'phase': phase, 'round': round_index, 'exit_code': exit_code,
+            'wall_seconds': wall, 'stall': wall > STALL_SECONDS, 'first_signing_ms': slowest_first_signing(output),
+            'event': event,
             'faults': faults_in(output) if event else [], 'log': str(log) if event else ''}
 
 
 def run_batch(commands, scratch, phase, round_index):
-    """Runs (arm, command) pairs at once, each timed to its own exit; returns their records in order."""
+    """Runs (tree, arm, command) triples at once, each timed to its own exit; returns their records in order."""
     started = time.monotonic()
     runs = []
-    for index, (arm, command) in enumerate(commands):
-        log = scratch / f'{arm}-{phase}-{round_index}-{index}.log'
+    for index, (tree, arm, command) in enumerate(commands):
+        log = scratch / f'{tree}-{arm}-{phase}-{round_index}-{index}.log'
         with open(log, 'wb') as out:
-            runs.append({'arm': arm, 'log': log, 'wall': None, 'timed_out': False,
+            runs.append({'tree': tree, 'arm': arm, 'log': log, 'wall': None, 'timed_out': False,
                          'process': subprocess.Popen(command, stdout=out, stderr=subprocess.STDOUT)})
     while any(run['wall'] is None for run in runs):
         now = time.monotonic()
@@ -128,7 +130,7 @@ def run_batch(commands, scratch, phase, round_index):
                 run['process'].wait()
                 run['wall'], run['timed_out'] = round(now - started, 2), True
         time.sleep(0.02)
-    return [record(run['arm'], phase, round_index, -1 if run['timed_out'] else run['process'].returncode,
+    return [record(run['tree'], run['arm'], phase, round_index, -1 if run['timed_out'] else run['process'].returncode,
                    run['log'].read_text(encoding='utf-8', errors='replace'), run['wall'], run['timed_out'], run['log'])
             for run in runs]
 
@@ -146,22 +148,29 @@ def selected_arms(text):
 
 
 def tally(records):
-    """Per arm and phase that ran: runs, events, stalls and the slowest run, in ARMS order."""
+    """Per tree, arm and phase that ran: runs, events, stalls and the slowest run, trees in first-run order and arms in
+    ARMS order."""
     rows = []
-    for name, _, _, _ in ARMS:
-        for phase in ('alone', 'contended'):
-            mine = [entry for entry in records if entry['arm'] == name and entry['phase'] == phase]
-            if not mine:
-                continue
-            rows.append({'arm': name, 'phase': phase, 'runs': len(mine),
-                         'events': sum(1 for entry in mine if entry['event']),
-                         'stalls': sum(1 for entry in mine if entry['stall']),
-                         'slowest_seconds': max((entry['wall_seconds'] for entry in mine), default=0.0)})
+    for tree in dict.fromkeys(entry['tree'] for entry in records):
+        for name, _, _, _ in ARMS:
+            for phase in ('alone', 'contended'):
+                mine = [entry for entry in records
+                        if entry['tree'] == tree and entry['arm'] == name and entry['phase'] == phase]
+                if mine:
+                    rows.append(tally_row(tree, name, phase, mine))
     return rows
 
 
-def host_identity(build):
-    """The CPU, its count, the system and the tree's compiler."""
+def tally_row(tree, name, phase, mine):
+    """One tally row over one tree's, arm's and phase's records."""
+    return {'tree': tree, 'arm': name, 'phase': phase, 'runs': len(mine),
+            'events': sum(1 for entry in mine if entry['event']),
+            'stalls': sum(1 for entry in mine if entry['stall']),
+            'slowest_seconds': max((entry['wall_seconds'] for entry in mine), default=0.0)}
+
+
+def host_identity(trees):
+    """The CPU, its count, the system and each tree's compiler."""
     cpu = platform.processor() or 'unknown'
     if os.name == 'nt':
         import winreg  # pylint: disable=import-outside-toplevel
@@ -175,7 +184,8 @@ def host_identity(build):
             if line.startswith('model name'):
                 cpu = line.partition(':')[2].strip()
                 break
-    return {'cpu': cpu, 'logical_cpus': os.cpu_count(), 'system': platform.platform(), 'compiler': compiler_of(build)}
+    return {'cpu': cpu, 'logical_cpus': os.cpu_count(), 'system': platform.platform(),
+            'compilers': {tree: compiler_of(build) for tree, build in trees.items()}}
 
 
 def compiler_of(build):
@@ -190,18 +200,20 @@ def compiler_of(build):
 
 def markdown(host, rounds, parallel, records):
     contended = f', then {parallel} processes at once' if parallel else ''
+    trees = ', '.join(f'{tree} ({compiler})' for tree, compiler in host['compilers'].items())
     lines = ['## Provider host check: threaded ML-DSA-65 signing, its control and its crd-crypto program', '',
-             f'CPU **{host["cpu"]}** ({host["logical_cpus"]} logical CPUs), {host["system"]}, {host["compiler"]}. '
-             f'{rounds} rounds; each runs every arm alone{contended}. A stall is a run over {STALL_SECONDS:g} s.', '',
-             '| Arm | Phase | Runs | Events | Stalls | Slowest s |', '|---|---|---|---|---|---|']
+             f'CPU **{host["cpu"]}** ({host["logical_cpus"]} logical CPUs), {host["system"]}; trees {trees}. '
+             f'{rounds} rounds; each runs every arm alone in each tree{contended}. A stall is a run over '
+             f'{STALL_SECONDS:g} s.', '',
+             '| Tree | Arm | Phase | Runs | Events | Stalls | Slowest s |', '|---|---|---|---|---|---|---|']
     for row in tally(records):
-        lines.append(f'| {row["arm"]} | {row["phase"]} | {row["runs"]} | {row["events"]} | {row["stalls"]} | '
-                     f'{row["slowest_seconds"]} |')
+        lines.append(f'| {row["tree"]} | {row["arm"]} | {row["phase"]} | {row["runs"]} | {row["events"]} | '
+                     f'{row["stalls"]} | {row["slowest_seconds"]} |')
     events = [entry for entry in records if entry['event']]
     lines += ['', f'**Events: {len(events)}.**']
     for entry in events[:12]:
-        lines += ['', f'### {entry["arm"]}, round {entry["round"]} ({entry["phase"]}): {entry["event"]}, '
-                      f'{entry["wall_seconds"]} s', '', '```']
+        lines += ['', f'### {entry["tree"]} {entry["arm"]}, round {entry["round"]} ({entry["phase"]}): '
+                      f'{entry["event"]}, {entry["wall_seconds"]} s', '', '```']
         lines += entry['faults'][:4] or ['(no fault line; see the log)']
         lines.append('```')
     return '\n'.join(lines) + '\n'
@@ -209,9 +221,9 @@ def markdown(host, rounds, parallel, records):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--build', required=True,
+    parser.add_argument('--build', required=True, action='append',
                         help='a build tree with crd-crypto-tests, crd-mldsa-threads-control and '
-                             'crd-mldsa-threads-cerid built')
+                             'crd-mldsa-threads-cerid built; repeat it to run each arm in each tree')
     parser.add_argument('--rounds', type=int, default=40, help='rounds; each runs every arm alone')
     parser.add_argument('--parallel', type=int, default=0,
                         help='then this many processes at once, the arms in turn (0: no contended phase)')
@@ -226,36 +238,45 @@ def main(argv=None):
         arms = selected_arms(args.arms)
     except ValueError as error:
         parser.error(str(error))
-    build = (Path(args.build) if os.path.isabs(args.build) else ROOT / args.build).resolve()
+    trees = {}
+    for text in args.build:
+        build = (Path(text) if os.path.isabs(text) else ROOT / text).resolve()
+        if build.name in trees:
+            parser.error(f'two trees named {build.name}')
+        trees[build.name] = build
     programs = {}
-    for name, path, arguments, _ in arms:
-        if path == CTEST:
-            programs[name] = [shutil.which(CTEST) or CTEST, '--test-dir', str(build / 'tests/crypto'), *arguments]
-            continue
-        program = build / path
-        if not program.is_file():
-            print(f'provider-host-check: {program} is not built (cmake --build <tree> --target crd-crypto-tests '
-                  'crd-mldsa-threads-control crd-mldsa-threads-cerid)', file=sys.stderr)
-            return 2
-        programs[name] = [str(program), *arguments]
+    for tree, build in trees.items():
+        for name, path, arguments, _ in arms:
+            if path == CTEST:
+                programs[tree, name] = [shutil.which(CTEST) or CTEST, '--test-dir', str(build / 'tests/crypto'),
+                                        *arguments]
+                continue
+            program = build / path
+            if not program.is_file():
+                print(f'provider-host-check: {program} is not built (cmake --build <tree> --target crd-crypto-tests '
+                      'crd-mldsa-threads-control crd-mldsa-threads-cerid)', file=sys.stderr)
+                return 2
+            programs[tree, name] = [str(program), *arguments]
     scratch = Path(args.scratch).resolve()
     scratch.mkdir(parents=True, exist_ok=True)
-    host = host_identity(build)
+    host = host_identity(trees)
+    pairs = list(programs)
     records = []
     for round_index in range(args.rounds):
-        batches = [('alone', [(name, programs[name])]) for name, _, _, _ in arms]
+        batches = [('alone', [(tree, name, programs[tree, name])]) for tree, name in pairs]
         if args.parallel:
-            turn = [arms[(round_index * args.parallel + index) % len(arms)][0] for index in range(args.parallel)]
-            batches.append(('contended', [(name, programs[name]) for name in turn]))
+            turn = [pairs[(round_index * args.parallel + index) % len(pairs)] for index in range(args.parallel)]
+            batches.append(('contended', [(tree, name, programs[tree, name]) for tree, name in turn]))
         for phase, commands in batches:
             for entry in run_batch(commands, scratch, phase, round_index):
                 records.append(entry)
                 if entry['event']:
-                    print(f'round {round_index} {entry["arm"]} ({phase}): {entry["event"]}', flush=True)
+                    print(f'round {round_index} {entry["tree"]} {entry["arm"]} ({phase}): {entry["event"]}',
+                          flush=True)
     text = markdown(host, args.rounds, args.parallel, records)
     print(text)
     if args.json:
-        Path(args.json).write_text(json.dumps({'schema': 'cerid-provider-host-check/1', 'rounds': args.rounds,
+        Path(args.json).write_text(json.dumps({'schema': 'cerid-provider-host-check/2', 'rounds': args.rounds,
                                                'parallel': args.parallel, 'host': host, 'tally': tally(records),
                                                'records': records}, indent=2), encoding='utf-8')
     if args.summary:
