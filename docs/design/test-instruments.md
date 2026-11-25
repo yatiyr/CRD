@@ -307,12 +307,14 @@ uploaded, and a leg with an event fails. The arms separate the causes: a hosted 
 control is a jobs defect, an event in the plain control anywhere is that machine's, and clean legs where this host
 faults put the fault on this host.
 
-Ten provider legs (NET.2, [session](../sessions/2026-11-25-crypto-threaded-signing-cross.md)) ask the same of the
-nonreproduced register's threaded ML-DSA signing entry: on hosted win-asan a thread's first signing with a shared
+Ten provider legs (NET.2, [session](../sessions/2026-11-25-crypto-threaded-signing-cross.md)) ask the same of
+[TP-17](../third-party-defects.md#tp-17), the threaded ML-DSA signing refusal: on hosted win-asan a thread's first
+signing with a shared
 ML-DSA-65 key was refused after 10 to 22 s, a second signing at once succeeding. Each leg (`windows-2025`; the case has
 failed only on Emerald and Granite Rapids Xeon runners, and each job draws its CPU) reads its CPU first and stops at
 once on one outside `provider_cpu` (`affected`, the default: a Xeon from Sapphire Rapids on; `intel`; `any`);
-otherwise it configures `win-asan`, builds `crd-crypto-tests` and the [programs that split the
+otherwise it configures each `provider_presets` tree (`win-asan` by default, `win-debug` and `win-release` without
+the sanitizer), builds `crd-crypto-tests` and the [programs that split the
 case](../../tests/foundation/crypto/control): `crd-mldsa-threads-control`, which makes the case's provider calls in its
 order through the same tree's AWS-LC alone (plain, with a start gate that releases the four first signings together,
 with the case's storage, both, as `SigningKey::sign`'s and `ProviderVerifier::verify`'s exact calls, and those in a
@@ -324,7 +326,8 @@ thread's stack touched, 512 KiB a page at a time, before its first signing, by i
 code AddressSanitizer does not instrument, which leaves the shadow untouched (`cerid-touch-stack`)), and the
 control's raw calls inside its own process (plain, as crd-crypto's exact calls written in that program, and verified by
 `ProviderVerifier`). It runs [provider-host-check.py](../../scripts/provider-host-check.py): `provider_rounds` rounds
-(40 by default), each running every arm `provider_arms` names (every arm when empty) once alone in a fresh process, the
+(40 by default), each running every arm `provider_arms` names (every arm when empty) once alone in a fresh process in
+each tree in turn, the
 case both directly and through CTest, then `provider_parallel` processes at once when that is not 0. An event is a
 nonzero exit, a timeout or a missing pass line, and a run over 5 s is counted as a stall; the summary tallies runs,
 events, stalls and the slowest run per arm and phase, failing logs are uploaded, and a leg with an event fails. An event
@@ -335,8 +338,9 @@ arm fails too; events in the case alone put it in the test program. Between crd-
 fails with its key from a raw seed and no verification, while the same calls written in the program (`raw-copy`) pass,
 leaves the code's build and placement and the thread's stack layout; a clean `cerid-touch` beside a failing `cerid`
 puts the trigger in the first signing's touch of new stack pages or their shadow, and `cerid-touch-stack` tells the two
-apart. Clean legs mean too little exposure,
-never a verdict.
+apart. A tree without the sanitizer reads only on a leg where win-asan's `control-copy-slim` failed: clean there, the
+sanitizer is needed to reach it; clean beside a clean win-asan control, nothing is read. Clean legs mean too little
+exposure, never a verdict; `control-copy-slim` clean on ten affected legs retires TP-17.
 
 The `experiment` input picks the legs (`all`, `fuzz`, `tsan`, `arm64-sanitizer-cost`, `x64-asan-stack-alignment`,
 `udp-ring`, `provider-threads`, `vulkan-sdk-installer`). The ARM64 sanitizer-cost legs
