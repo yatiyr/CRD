@@ -646,7 +646,8 @@ jobs:
     # win-asan-ml-dsa-threaded-signing-refused). Each leg builds the case and the programs that split it on win-asan: its
     # Cerid-free control (the same provider calls through the tree's AWS-LC alone) and the case through crd-crypto
     # without the test program (tests/foundation/crypto/control), and runs them in fresh processes
-    # (scripts/provider-host-check.py).
+    # (scripts/provider-host-check.py). The case has failed only on Intel Xeon runners (8573C, 6973P-C) and passed on AMD
+    # EPYC ones (7763, 9V45), and the runner's CPU is drawn per job, so six legs make an Intel machine near certain.
     name: Host check (provider threads, leg ${{ matrix.leg }})
     if: inputs.experiment == 'all' || inputs.experiment == 'provider-threads'
     runs-on: windows-2025
@@ -657,7 +658,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [1, 2]
+        leg: [1, 2, 3, 4, 5, 6]
 
     steps:
       - name: Checkout

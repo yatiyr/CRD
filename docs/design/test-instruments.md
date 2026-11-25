@@ -307,22 +307,22 @@ uploaded, and a leg with an event fails. The arms separate the causes: a hosted 
 control is a jobs defect, an event in the plain control anywhere is that machine's, and clean legs where this host
 faults put the fault on this host.
 
-Two provider legs (NET.2, [session](../sessions/2026-11-25-crypto-threaded-signing-control.md)) ask the same of
-the nonreproduced register's threaded ML-DSA signing entry: on hosted win-asan a thread's first signing with a shared
-ML-DSA-65 key was refused after 10 to 19 s, a second signing at once succeeding. Each leg (`windows-2025`) configures
-`win-asan`, builds `crd-crypto-tests` and the [programs that split the case](../../tests/foundation/crypto/control):
-`crd-mldsa-threads-control`, which makes the case's provider calls in its order through the same tree's AWS-LC alone
-(plain, with a start gate that releases the four first signings together, with the case's storage, and both), and
-`crd-mldsa-threads-cerid`, the case through crd-crypto's `SigningKey` without the test program (plain, gated, warmed
-by one signing on the main thread, and with its signatures outside the engine's allocator). It runs
-[provider-host-check.py](../../scripts/provider-host-check.py): `provider_rounds` rounds (40 by default), each running
-every arm once alone in a fresh process, the case both directly and through CTest, then `provider_parallel` processes
-at once when that is not 0. An event is a nonzero exit, a timeout or a missing pass line, and a run over 5 s is counted
-as a stall; the summary tallies runs, events, stalls and the slowest run per arm and phase, failing logs are uploaded,
-and a leg with an event fails. An event in a control arm is AWS-LC's on that machine, the reproduction a
-[third-party entry](../third-party-defects.md) needs. Events in the `crd-mldsa-threads-cerid` arms beside clean
-controls put the cause in crd-crypto's use of the provider; events in the case alone put it in the test program. Clean
-legs mean too little exposure, never a verdict.
+Two provider legs (NET.2, [session](../sessions/2026-11-25-crypto-threaded-signing-control.md)) ask the same of the
+nonreproduced register's threaded ML-DSA signing entry: on hosted win-asan a thread's first signing with a shared
+ML-DSA-65 key was refused after 10 to 19 s, a second signing at once succeeding. Each leg (`windows-2025`, six of them,
+since the case has failed only on Intel Xeon runners) configures `win-asan`, builds `crd-crypto-tests` and the [programs
+that split the case](../../tests/foundation/crypto/control): `crd-mldsa-threads-control`, which makes the case's
+provider calls in its order through the same tree's AWS-LC alone (plain, with a start gate that releases the four first
+signings together, with the case's storage, and both), and `crd-mldsa-threads-cerid`, the case through crd-crypto's
+`SigningKey` without the test program (plain, gated, warmed by one signing on the main thread, and with its signatures
+outside the engine's allocator). It runs [provider-host-check.py](../../scripts/provider-host-check.py):
+`provider_rounds` rounds (40 by default), each running every arm once alone in a fresh process, the case both directly
+and through CTest, then `provider_parallel` processes at once when that is not 0. An event is a nonzero exit, a timeout
+or a missing pass line, and a run over 5 s is counted as a stall; the summary tallies runs, events, stalls and the
+slowest run per arm and phase, failing logs are uploaded, and a leg with an event fails. An event in a control arm is
+AWS-LC's on that machine, the reproduction a [third-party entry](../third-party-defects.md) needs. Events in the
+`crd-mldsa-threads-cerid` arms beside clean controls put the cause in crd-crypto's use of the provider; events in the
+case alone put it in the test program. Clean legs mean too little exposure, never a verdict.
 
 The `experiment` input picks the legs (`all`, `fuzz`, `tsan`, `arm64-sanitizer-cost`, `x64-asan-stack-alignment`,
 `udp-ring`, `provider-threads`, `vulkan-sdk-installer`). The ARM64 sanitizer-cost legs
