@@ -11,8 +11,8 @@ provider calls through the same tree's AWS-LC alone, plain, with its threads' fi
 with the case's storage (storage) and with SigningKey::sign's and ProviderVerifier::verify's calls exactly (copy); and
 crd-mldsa-threads-cerid, the case through crd-crypto's SigningKey without the test program, plain, gated, warmed by one
 signing on the main thread (warm), with its signatures outside the engine's allocator (std-buffer), its key from a raw
-seed (seed-key), verified by raw calls (raw-verify) or not at all (no-verify), and the control's raw AWS-LC calls made
-inside it (raw): plain, as SigningKey::sign's exact calls written in the program (raw-copy) and verified by
+seed (seed-key), verified by raw calls (raw-verify) or not at all (no-verify), with each thread's stack touched before
+its first signing (touch), and the control's raw AWS-LC calls made inside it (raw): plain, as SigningKey::sign's exact calls written in the program (raw-copy) and verified by
 ProviderVerifier (raw-crd-verify). --arms runs only the named arms. With --parallel N a round then runs N processes at
 once, the arms in turn, as CTest's parallel jobs load the lane. An event is a nonzero exit, a timeout or a missing pass
 line; a stall is a run over STALL_SECONDS, counted apart. The driver exits 1 when any run had an event. It builds
@@ -55,6 +55,7 @@ ARMS = (('case', 'tests/crypto/crd-crypto-tests' + SUFFIX, (CASE,), 'All tests p
         ('cerid-seed-key', CERID, ('seed-key',), 'result: clean'),
         ('cerid-raw-verify', CERID, ('raw-verify',), 'result: clean'),
         ('cerid-no-verify', CERID, ('no-verify',), 'result: clean'),
+        ('cerid-touch', CERID, ('touch',), 'result: clean'),
         ('cerid-raw', CERID, ('raw',), 'result: clean'),
         ('cerid-raw-copy', CERID, ('raw', 'copy'), 'result: clean'),
         ('cerid-raw-crd-verify', CERID, ('raw', 'crd-verify'), 'result: clean'))

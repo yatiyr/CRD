@@ -5,8 +5,10 @@
 // shape of crd-crypto-tests' "Provider: one verifier and one key serve several threads": four threads, up to eight
 // signings each, a thread stopping at its first fault, a refused signing timed and signed again at once, an invalid
 // verification verified again. With the gate on, the threads wait until all four exist, so their first signings
-// overlap. Output: one line per thread, then "result: clean" (0) or "result: FAULT" (1); setup failures are the
-// programs' own "result: SETUP ..." (2).
+// overlap; with touch on, each thread first touches kTouchBytes of its stack below its entry, a page at a time, so the
+// first signing finds its stack pages (and, under AddressSanitizer, their shadow) already committed. Output: one line
+// per thread, then "result: clean" (0) or "result: FAULT" (1); setup failures are the programs' own
+// "result: SETUP ..." (2).
 #pragma once
 
 #include <atomic>
@@ -21,6 +23,25 @@ namespace mldsa_threads
 constexpr unsigned kThreads = 4U;
 constexpr unsigned kSignings = 8U;
 constexpr std::uint8_t kMessage[] = {'t', 'h', 'r', 'e', 'a', 'd', 's'};
+constexpr std::size_t kTouchBytes = 512U * 1024U; // half of a default 1 MiB thread stack
+constexpr std::size_t kTouchFrame = 16U * 1024U;
+constexpr std::size_t kPage = 4096U;
+
+// Touches `bytes` of the calling thread's stack below this frame, one kTouchFrame frame per call; the write after the
+// inner call keeps each frame alive across it (no tail call reuses it).
+inline void touch_stack(std::size_t bytes)
+{
+    volatile std::uint8_t frame[kTouchFrame];
+    for (std::size_t offset = 0U; offset < kTouchFrame; offset += kPage)
+    {
+        frame[offset] = 0U;
+    }
+    if (bytes > kTouchFrame)
+    {
+        touch_stack(bytes - kTouchFrame);
+    }
+    frame[0] = 1U;
+}
 
 // One thread's outcome, printed by the main thread after the joins.
 struct Outcome
@@ -94,7 +115,7 @@ inline int report(const Outcome (&outcomes)[kThreads])
 }
 
 // Runs the four threads, each with the session make() returns, and reports them.
-template <typename Make> int run(bool gate, Make make)
+template <typename Make> int run(bool gate, Make make, bool touch = false)
 {
     Outcome outcomes[kThreads];
     std::thread threads[kThreads];
@@ -104,6 +125,10 @@ template <typename Make> int run(bool gate, Make make)
         threads[t] = std::thread(
             [&, t]
             {
+                if (touch)
+                {
+                    touch_stack(kTouchBytes);
+                }
                 auto session = make();
                 arrived.fetch_add(1U);
                 while (gate && arrived.load() < kThreads)

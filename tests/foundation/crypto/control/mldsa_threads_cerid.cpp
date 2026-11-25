@@ -6,6 +6,7 @@
 // fault here is crd-crypto's use of the provider and a fault only in the case is the test program's. Arguments, which
 // cross the key, the signing and the verification between crd-crypto and raw_signing.hpp's AWS-LC calls:
 //   "gate"        holds the threads at a start gate until all four exist;
+//   "touch"       has each thread touch its stack before its first signing (threads_harness.hpp);
 //   "warm"        signs once on the main thread before they start, so no thread's signing is the key's first;
 //   "std-buffer"  keeps each thread's signature in a std::unique_ptr array instead of a containers::Array;
 //   "seed-key"    makes the SigningKey with from_seed over a RAND_bytes seed wiped by OPENSSL_cleanse, not generate
@@ -49,7 +50,8 @@ constexpr unsigned kNoVerify = 5U;
 constexpr unsigned kRaw = 6U;
 constexpr unsigned kCopy = 7U;
 constexpr unsigned kCrdVerify = 8U;
-constexpr unsigned kFlagCount = 9U;
+constexpr unsigned kTouch = 9U;
+constexpr unsigned kFlagCount = 10U;
 
 // One thread's signing state, as one thread of the case holds it.
 struct Session
@@ -141,8 +143,8 @@ CryptoError make_key(SigningKey& key, bool seed_key)
 
 int main(int argc, char** argv)
 {
-    const char* const names[] = {"gate",      "warm", "std-buffer", "seed-key",  "raw-verify",
-                                 "no-verify", "raw",  "copy",       "crd-verify"};
+    const char* const names[] = {"gate",      "warm", "std-buffer", "seed-key",   "raw-verify",
+                                 "no-verify", "raw",  "copy",       "crd-verify", "touch"};
     bool flags[kFlagCount] = {};
     if (!mldsa_threads::parse_flags(argc, argv, names, flags, kFlagCount))
     {
@@ -157,6 +159,7 @@ int main(int argc, char** argv)
     {
         mldsa_threads::raw::Options options;
         options.gate = flags[kGate];
+        options.touch = flags[kTouch];
         options.copy = flags[kCopy];
         options.verify = !flags[kNoVerify];
         options.verifier = flags[kCrdVerify] ? &provider_verifies : nullptr;
@@ -198,5 +201,5 @@ int main(int argc, char** argv)
             return 2;
         }
     }
-    return mldsa_threads::run(flags[kGate], make);
+    return mldsa_threads::run(flags[kGate], make, flags[kTouch]);
 }

@@ -38,6 +38,7 @@ using Verifier = bool (*)(const std::uint8_t* public_key, const std::uint8_t* si
 struct Options
 {
     bool gate = false;
+    bool touch = false;
     bool storage = false;
     bool copy = false;           // implies storage
     bool verify = true;          // false: each signing is not verified
@@ -191,19 +192,21 @@ inline int run(const Options& options)
         EVP_PKEY_free(key);
         return 2;
     }
-    const int result = mldsa_threads::run(options.gate,
-                                          [&]
-                                          {
-                                              Session session;
-                                              session.key = key;
-                                              session.public_key = public_key;
-                                              session.options = &options;
-                                              if (options.storage || options.copy)
-                                              {
-                                                  session.heap_signature = std::make_unique<std::uint8_t[]>(kSignature);
-                                              }
-                                              return session;
-                                          });
+    const int result = mldsa_threads::run(
+        options.gate,
+        [&]
+        {
+            Session session;
+            session.key = key;
+            session.public_key = public_key;
+            session.options = &options;
+            if (options.storage || options.copy)
+            {
+                session.heap_signature = std::make_unique<std::uint8_t[]>(kSignature);
+            }
+            return session;
+        },
+        options.touch);
     EVP_PKEY_free(key);
     return result;
 }

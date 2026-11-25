@@ -5562,7 +5562,7 @@ class TestInstruments(unittest.TestCase):
             self.assertEqual([arm[0] for arm in provider_host_check.ARMS],
                              ['case', 'case-ctest', 'control', 'control-gate', 'control-storage', 'control-gate-storage',
                               'control-copy', 'cerid', 'cerid-gate', 'cerid-warm', 'cerid-std-buffer', 'cerid-seed-key',
-                              'cerid-raw-verify', 'cerid-no-verify', 'cerid-raw', 'cerid-raw-copy',
+                              'cerid-raw-verify', 'cerid-no-verify', 'cerid-touch', 'cerid-raw', 'cerid-raw-copy',
                               'cerid-raw-crd-verify'])
             # --arms keeps ARMS order and refuses a name it does not know; empty runs every arm.
             self.assertEqual(provider_host_check.selected_arms(''), provider_host_check.ARMS)
