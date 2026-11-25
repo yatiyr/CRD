@@ -131,7 +131,10 @@ public:
     // already recorded, which changes nothing. `max_ack_delay_ns` is this side's advertised max_ack_delay. A number
     // comes here once: duplicate suppression is the protection's replay window (RFC 9000 section 12.3), and the
     // ranges forget what an acknowledged ACK frame or full storage retires.
-    bool on_received(u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns, u64 max_ack_delay_ns) noexcept;
+    // `awaited`: an ack-eliciting packet whose sender waits on its acknowledgement, one carrying more than PING
+    // (awaited_unreported).
+    bool on_received(u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns, u64 max_ack_delay_ns,
+                     bool awaited = true) noexcept;
 
     // When the owed ACK must be sent: kNeverNs when none is owed. An ACK may still ride along in any packet while
     // ranges() is not empty; only ack-eliciting packets make one owed (section 13.2.1).
@@ -156,6 +159,11 @@ public:
         return cont::ConstSpan<QuicAckRange>(m_ranges, m_count);
     }
     [[nodiscard]] const EcnCounts& ecn() const noexcept { return m_ecn; }
+    // Whether an awaited packet arrived that no ACK frame the peer acknowledged has reported (one reaching the largest
+    // ack-eliciting number): until one has, a lost ACK frame would leave its sender waiting, so an ACK rides every
+    // packet (QuicConnection's put_ack). A PING alone needs no second report, and one that arrived out of order after
+    // such a frame was written may count as reported: its owed ACK goes at once all the same.
+    [[nodiscard]] bool awaited_unreported() const noexcept { return m_awaited_unreported; }
 
 private:
     void insert(u64 number) noexcept;
@@ -169,6 +177,7 @@ private:
     u64           m_deadline_ns = kNeverNs;
     EcnCounts m_ecn;
     bool          m_ecn_seen = false;
+    bool m_awaited_unreported = false;
 };
 
 // One sent packet as the sender records it. `token` is the caller's handle on what the packet carried (its frames to
@@ -488,8 +497,8 @@ public:
     // A packet of `space` and slot `path` opened and processed (QuicAckTracker::on_received, and the receive
     // timestamp log for slot 0's Application space), each number once (QuicAckTracker::on_received); false for a
     // number still recorded, a discarded space or a slot not open.
-    bool on_received(QuicSpace space, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns,
-                     usize path = 0U) noexcept;
+    bool on_received(QuicSpace space, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns, usize path = 0U,
+                     bool awaited = true) noexcept;
     // An ACK frame of `space` (appendix A.7) acknowledging slot `path`'s packets (an ACK frame's are slot 0's, a
     // PATH_ACK's its path ID's), received in a packet of slot `via`. NoPath for either slot not open or `path`
     // stopped (stop_path: its packets are lost already); an error changes nothing.

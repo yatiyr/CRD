@@ -2687,6 +2687,56 @@ TEST_CASE("QUIC connection: a server that only acknowledges retires what its ACK
     CHECK(client.recovery().pto_count() == 0U);
 }
 
+TEST_CASE("QUIC connection: a sender's packets carry an ACK of the receiver's ACK-only packets once a round trip",
+          "[net][net-path][quic-connection]")
+{
+    // RFC 9000 section 13.2.1 lets an acknowledgement of non-eliciting packets wait for an eliciting one. The sender
+    // carries one a smoothed RTT (and those the receiver's PINGs owe), so it writes, and the receiver reads, one ACK
+    // frame in tens of packets instead of one a packet; that the receiver still retires what its ACK frames reported
+    // is the case of a server that only acknowledges. The windows take the whole transfer: the receiver sends no
+    // update, which would draw an ACK into every packet until one reporting it is acknowledged.
+    Identity identity;
+    CountingAllocator allocator;
+    QuicStreamLimits limits;
+    limits.peer_bidi = 1U;
+    limits.local_bidi = 1U;
+    limits.receive_bytes = 4194304U;
+    limits.send_bytes = 4194304U;
+    limits.stream_window = 4194304U;
+    limits.connection_window = 4194304U;
+    limits.connection_max_window = 4194304U;
+    QuicConnectionConfig client_config = config_for(QuicSide::Client, identity, QuicVersion::V1);
+    QuicConnectionConfig server_config = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
+    client_config.streams = limits;
+    server_config.streams = limits;
+    QuicConnection client(allocator, client_config);
+    QuicConnection server(allocator, server_config);
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+    net->advance(net->now + 100U * kMs);
+    const QuicConnectionCounters before = client.counters();
+    constexpr u64 total = 1048576U;
+    u64 stream = 0U;
+    REQUIRE(client.streams().open(true, stream) == QuicStreamError::None);
+    u64 written = 0U;
+    u64 read = 0U;
+    REQUIRE(net->run_until(
+        [&]
+        {
+            static_cast<void>(write_pattern(client.streams(), stream, written, total, stream));
+            return server.streams().recv_state(stream) != QuicRecvState::None &&
+                   drain(server.streams(), stream, read, stream);
+        }));
+    CHECK(read == total);
+    const u64 sent = client.counters().datagrams_sent - before.datagrams_sent;
+    const u64 acks = client.counters().acks_sent - before.acks_sent;
+    INFO("datagrams " << sent << ", ACK frames " << acks);
+    CHECK(sent > 700U);
+    CHECK(acks * 16U < sent);
+    CHECK(server.state() == QuicConnectionState::Established);
+}
+
 TEST_CASE("QUIC connection: ACK-only packets nothing acknowledges never hold back the next packet",
           "[net][4.2a][quic-connection]")
 {

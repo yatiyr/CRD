@@ -451,6 +451,7 @@ struct QuicConnectionCounters
     u64 handover_losses = 0U;    // losses of packets a scheduled handover may have taken, kept from congestion control
     u64 handover_locks = 0U;     // learned schedules put in force where none was
     u64 address_observations = 0U; // OBSERVED_ADDRESS reports taken (each newer than its path's last)
+    u64 acks_sent = 0U;            // ACK and PATH_ACK frames sent
 };
 
 // (MSVC C4324 as for QuicPacketProtection, which it holds inline.)
@@ -769,9 +770,12 @@ private:
         u64 next = 0U;
         u64 skipped = kQuicNoPacket; // the latest number skipped
         u8 probes = 0U;              // probe packets the space owes
+        u8 refresh = 0U;             // PINGs a path slot's space owes to measure its RTT (owe_refreshes())
         u32 ack_only = 0U;           // ACK-only packets sent since the last ack-eliciting one
         u64 eliciting_ns = 0U;       // when the space's last ack-eliciting packet left
-        u8 refresh = 0U;             // PINGs a path slot's space owes to measure its RTT (owe_refreshes())
+        // The slot's own acknowledgement that nothing owes (it reports only non-eliciting packets) rides no packet
+        // before this: one smoothed RTT after the last packet that carried it (write_frames' put_ack).
+        u64 ack_ride_ns = 0U;
     };
     static constexpr usize kNumberSpaces = kQuicSpaces - 1U + kQuicMaxPaths;
     [[nodiscard]] static constexpr usize number_space(QuicSpace space, usize slot) noexcept

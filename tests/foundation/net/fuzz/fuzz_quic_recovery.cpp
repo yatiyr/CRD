@@ -23,8 +23,11 @@
 // says whether it raised the largest, and names a send time no later than now. Received ranges stay ordered, separated,
 // bounded and made of numbers received; a copy of a number reaches recovery only while the ranges hold it (the packet
 // protection's replay window refuses any other) and is then refused, so a number is recorded at most once; a written
-// ACK frame reads back as the largest ranges. A loss or probe timeout fires only when due, and the timer is armed while
-// ack-eliciting packets are outstanding in a space it may serve. A probe or anti-deadlock timeout declares nothing lost
+// ACK frame reads back as the largest ranges. A received ack-eliciting packet carrying more than PING (bit 3 of its
+// second number byte clear) leaves its space's acknowledgement awaited until a packet carrying an ACK frame that
+// reaches the space's largest ack-eliciting number is acknowledged (or found a spurious loss); a PING alone does not.
+// A loss or probe timeout fires only when due, and the timer is armed while ack-eliciting packets are outstanding in
+// a space it may serve. A probe or anti-deadlock timeout declares nothing lost
 // but, in a space whose storage could not record a packet, its oldest outstanding packets, in order; after it the space
 // can record its probes. A send records whenever the space says it can, discarding at most the oldest outstanding
 // ACK-only packet with no skipped number before it. Receive timestamps (draft-ietf-quic-receive-ts-03): a written
@@ -97,6 +100,8 @@ struct ModelSpace
     u64   carry = kQuicNoPacket; // an ACK frame written for the next packet to carry
     bool  received[kReceivedNumbers] = {};
     u64 received_ns[kReceivedNumbers] = {};
+    u64 largest_eliciting = kQuicNoPacket; // received
+    bool awaited = false;                  // QuicAckTracker::awaited_unreported
     bool  discarded = false;
 
     Sent* find(u64 number)
@@ -141,9 +146,11 @@ struct Log final : QuicRecoveryEvents
     const u64* now = nullptr;
     Event events[kModelPackets * 3U];
     usize count = 0U;
+    u64 carried = kQuicNoPacket; // the largest ACK frame that packets acknowledged by an ACK frame carried
 
     void on_acked(QuicSpace space, const QuicSentPacket& packet) noexcept override
     {
+        carry(packet);
         if (add('a', space, packet))
         {
             controls[packet.path].on_acked(space, packet, kNeverNs, *now);
@@ -165,9 +172,17 @@ struct Log final : QuicRecoveryEvents
     }
     void on_spurious(QuicSpace space, const QuicSentPacket& packet, u64 lost_ns) noexcept override
     {
+        carry(packet);
         if (recovery->on_path(space, packet))
         {
             controls[packet.path].on_spurious(space, packet, lost_ns, *now);
+        }
+    }
+    void carry(const QuicSentPacket& packet) noexcept
+    {
+        if (packet.carried_ack != kQuicNoPacket && (carried == kQuicNoPacket || packet.carried_ack > carried))
+        {
+            carried = packet.carried_ack;
         }
     }
     // Whether the packet was on its path's estimate.
@@ -425,6 +440,7 @@ void check_state(World& w)
         const QuicSpace id = (s < 2U) ? static_cast<QuicSpace>(s) : QuicSpace::Application;
         const usize path = (s < 2U) ? 0U : s - 2U;
         check_ranges(space, w.recovery.received(id, path));
+        CRD_FUZZ_REQUIRE(w.recovery.received(id, path).awaited_unreported() == space.awaited);
         // Until the backoff saturates its timer past any time.
         const bool may_serve = ((s < 2U) || w.confirmed) && w.recovery.pto_count(path) < 30U;
         for (usize i = 0U; i < space.count; ++i)
@@ -642,6 +658,7 @@ void op_ack(World& w, QuicSpace id, usize path, usize via, u8 p, const u8* more,
     const usize          from = w.log.count;
     QuicPathControl& control = w.controls[owner];
     control.on_ack_begin();
+    w.log.carried = kQuicNoPacket;
     const QuicAckOutcome out = w.recovery.on_ack(id, frame.ack, w.now, w.log, path, via);
     if (out.error == QuicRecoveryError::None)
     {
@@ -714,6 +731,12 @@ void op_ack(World& w, QuicSpace id, usize path, usize via, u8 p, const u8* more,
                               ? ranges[0].largest
                               : space.largest_acked;
     apply_events(w, from, ConstSpan<QuicAckRange>(ranges, count), threshold, steps);
+    // The acknowledged packets' ACK frames retire what they reported, an awaited packet with the largest ack-eliciting.
+    if (w.log.carried != kQuicNoPacket &&
+        (space.largest_eliciting == kQuicNoPacket || w.log.carried >= space.largest_eliciting))
+    {
+        space.awaited = false;
+    }
     usize lost = 0U;
     for (usize i = from; i < w.log.count; ++i)
     {
@@ -742,13 +765,21 @@ void op_receive(World& w, QuicSpace id, usize path, u8 p, u8 q)
         return; // its range forgotten: QuicPacketProtection's replay window refuses the copy (RFC 9000 section 12.3)
     }
     const auto  ecn    = static_cast<Ecn>(q & 3U);
-    const bool  added  = w.recovery.on_received(id, number, (q & 4U) != 0U, ecn, w.now, path);
+    const bool eliciting = (q & 4U) != 0U;
+    const bool awaited = (q & 8U) == 0U; // more than PING
+    const bool added = w.recovery.on_received(id, number, eliciting, ecn, w.now, path, awaited);
     CRD_FUZZ_REQUIRE(added == (w.usable(id, path) && !space.discarded && !held));
     CRD_FUZZ_REQUIRE(!added || !space.received[number]);
     if (added)
     {
         space.received[number] = true;
         space.received_ns[number] = w.now;
+        if (eliciting)
+        {
+            space.awaited = space.awaited || awaited;
+            const bool larger = space.largest_eliciting == kQuicNoPacket || number > space.largest_eliciting;
+            space.largest_eliciting = larger ? number : space.largest_eliciting;
+        }
         if (id == QuicSpace::Application && path == 0U && !w.log_ended && w.per_ack != 0U &&
             w.basis_ns == kNeverNs)
         {
@@ -1027,6 +1058,7 @@ void op_state(World& w, QuicSpace id, usize path, u8 p)
         apply_events(w, from, ConstSpan<QuicAckRange>(), kQuicPacketThreshold, 0U);
         ModelSpace& space = w.spaces[static_cast<usize>(id)];
         space.discarded = true;
+        space.awaited = false;
         for (usize i = 0U; i < space.count; ++i)
         {
             CRD_FUZZ_REQUIRE(space.sent[i].state != kOut);

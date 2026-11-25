@@ -203,8 +203,8 @@ void QuicAckTracker::insert(u64 number) noexcept
     ++m_count;
 }
 
-bool QuicAckTracker::on_received(u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns,
-                                 u64 max_ack_delay_ns) noexcept
+bool QuicAckTracker::on_received(u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns, u64 max_ack_delay_ns,
+                                 bool awaited) noexcept
 {
     for (usize i = 0U; i < m_count; ++i)
     {
@@ -241,6 +241,7 @@ bool QuicAckTracker::on_received(u64 number, bool ack_eliciting, Ecn ecn, u64 re
     }
 
     bool immediate = m_space != QuicSpace::Application || ecn == Ecn::Ce;
+    m_awaited_unreported = m_awaited_unreported || awaited;
     if (m_largest_eliciting != kQuicNoPacket && number < m_largest_eliciting)
     {
         immediate = true; // out of order
@@ -316,6 +317,8 @@ QuicAckWrite QuicAckTracker::write(cont::Span<u8> out, u64 now_ns, u64 exponent,
 
 void QuicAckTracker::on_ack_acknowledged(u64 largest) noexcept
 {
+    m_awaited_unreported =
+        m_awaited_unreported && (m_largest_eliciting == kQuicNoPacket || largest < m_largest_eliciting);
     if (m_count == 0U || m_ranges[0].largest == 0U)
     {
         return;
@@ -1048,8 +1051,8 @@ void QuicRecovery::on_ack_acknowledged(usize path, u64 largest) noexcept
     }
 }
 
-bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns,
-                               usize path) noexcept
+bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns, usize path,
+                               bool awaited) noexcept
 {
     if (!usable(id, path))
     {
@@ -1061,7 +1064,7 @@ bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, Ecn
         return false;
     }
     const u64 max_delay = (id == QuicSpace::Application) ? m_local_max_ack_delay_ns : 0U;
-    if (!space.received.on_received(number, ack_eliciting, ecn, received_ns, max_delay))
+    if (!space.received.on_received(number, ack_eliciting, ecn, received_ns, max_delay, awaited))
     {
         return false;
     }

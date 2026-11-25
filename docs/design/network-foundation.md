@@ -487,7 +487,10 @@ versions, HANDSHAKE_DONE confirming it) and `crd-fuzz-net-quic-packet` (received
   side's max_ack_delay; non-ack-eliciting packets owe nothing. The ACK frame holds as many of the largest ranges as
   the room takes, the delay since the largest arrived (exponent 3 in Initial and Handshake, whose ACKs precede the
   parameters, this side's own after) and the ECN counts once a marked packet arrived. When a packet carrying an ACK is
-  acknowledged, the ranges up to its largest are retired, the largest received number always kept (13.2.4).
+  acknowledged, the ranges up to its largest are retired, the largest received number always kept (13.2.4). A 1-RTT
+  ACK that nothing owes (it reports only the peer's ACK-only packets) rides one packet a smoothed RTT, not every
+  packet (13.2.1 lets it wait): the peer still retires its ranges each round trip, and a bulk sender writes and its
+  receiver reads one ACK frame a round trip (2026-11-25: 6% of the board's bulk CPU; `acks_sent` counts them).
 - **Sending.** Each space's sent packets sit in number order in caller storage, which bounds what a connection
   holds in flight (`can_send`; a full space refuses, and data stops eight entries short so that ACK-only packets and
   probes can always free the peer's: `can_send_data`). An outstanding ACK-only packet (neither ack-eliciting nor in
@@ -786,7 +789,7 @@ the outcomes. Like S40 it knows nothing of packets.
 - **Sending.** 1-RTT packets carry the connection's own frames and CRYPTO, then datagrams, then stream data: latency
   first. Each frame carries its Length, so a packet's padding can follow it; one that does not fit the room left
   waits for the next packet. An owed ACK goes first; an ACK only carried along follows the waiting datagrams, so a
-  datagram of the largest size goes even while every packet carries an ACK. A DATAGRAM frame is ack-eliciting and
+  datagram of the largest size goes even while packets carry ACKs. A DATAGRAM frame is ack-eliciting and
   congestion controlled, never resent and takes no flow-control credit. A datagram queued longer than `max_age_ns` is
   dropped unsent.
 - **Outcomes** (section 5.2, optional per connection). Each sent datagram's id is a ledger record; acknowledgement

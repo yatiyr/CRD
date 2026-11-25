@@ -1318,7 +1318,8 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
     decided(now_ns);
     if (!m_space_gone[quic_space_index(space)])
     {
-        static_cast<void>(m_recovery->on_received(space, opened.number, eliciting, ecn, now_ns, m_receive_slot));
+        static_cast<void>(
+            m_recovery->on_received(space, opened.number, eliciting, ecn, now_ns, m_receive_slot, beyond_ping));
         m_received_eliciting_ns = eliciting ? now_ns : m_received_eliciting_ns;
         const bool wanted = space == QuicSpace::Application && beyond_ping && m_receive_slot < kQuicMaxPaths;
         m_beyond_ping |= wanted ? static_cast<u8>(1U << m_receive_slot) : u8{0};
@@ -2696,11 +2697,17 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
         return bytes != 0U;
     };
     // An ACK that is owed goes first; one only carried along follows waiting datagrams, so that a datagram of the
-    // largest size fits the next packet while every packet carries an ACK.
+    // largest size fits the next packet while packets carry ACKs.
     const auto put_ack = [&]
     {
         // Path ID 0's acknowledgement is an ACK frame, the others' PATH_ACK frames (RFC 10069 section 2.3). The
-        // slot's own goes in every packet, settled by the packet's carried_ack, unless it rides another slot.
+        // slot's own goes in every 1-RTT packet, settled by the packet's carried_ack, while it reports a packet
+        // carrying more than PING that no acknowledged ACK frame has reported (so a lost frame costs its sender
+        // nothing). Once the rest is ACK-only packets and PINGs (a receiver's), it rides one packet a smoothed RTT,
+        // and whenever one is owed (RFC 9000 section 13.2.1 lets an acknowledgement of non-eliciting packets wait):
+        // the peer still retires what its ACK frames reported each round trip (section 13.2.4), and a bulk sender
+        // writes and its receiver reads one ACK frame a round trip, not one a packet. It rides another slot only
+        // while owed.
         const auto ack_form = [this](usize of)
         {
             const u64 path_id = m_protection.path_id(of); // a reclaimed slot 0's later path ID takes PATH_ACK
@@ -2708,10 +2715,15 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
         };
         const bool application = space == QuicSpace::Application;
         const usize rider = application ? ack_rider() : kQuicNoPath;
-        if ((!application || ack_carrier(rider, slot) == slot) && !m_recovery->received(space, slot).ranges().empty())
+        const QuicAckTracker& received = m_recovery->received(space, slot);
+        const bool owed = received.awaited_unreported() || received.ack_deadline_ns() != kNeverNs;
+        const bool rides = !application || (ack_carrier(rider, slot) == slot &&
+                                            (owed || m_numbers[number_space(space, slot)].ack_ride_ns <= now_ns));
+        if (rides && !received.ranges().empty())
         {
             const QuicAckWrite ack = m_recovery->write_ack(space, frames.subspan(used), now_ns, slot, ack_form(slot));
             used += ack.bytes;
+            m_counters.acks_sent += (ack.bytes != 0U) ? 1U : 0U;
             written.carried_ack = (ack.bytes != 0U) ? ack.largest : kQuicNoPacket;
             written.steers = written.steers || ack.bytes != 0U;
             if (application && ack.bytes != 0U)
@@ -2735,6 +2747,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             if (ack.bytes != 0U)
             {
                 const auto bit = static_cast<u8>(1U << other);
+                ++m_counters.acks_sent;
                 written.steers = true;
                 written.carried_other = written.carried_other || (m_beyond_ping & bit) != 0U;
                 m_beyond_ping &= static_cast<u8>(~bit);
@@ -3327,6 +3340,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     }
     if (space == QuicSpace::Application && written.carried_ack != kQuicNoPacket)
     {
+        numbers.ack_ride_ns = add_saturating(now_ns, m_recovery->rtt(slot).smoothed_ns);
         m_protection.sent_acknowledgement();
     }
     if (!m_protection.can_send(QuicPacketType::Initial))

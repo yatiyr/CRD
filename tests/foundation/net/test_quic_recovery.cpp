@@ -345,6 +345,33 @@ TEST_CASE("quic recovery: an acknowledged ACK frame retires its ranges (RFC 9000
     CHECK(same_ranges(tracker.ranges(), {{9U, 9U}}));
 }
 
+TEST_CASE("quic recovery: an awaited packet stays unreported until an acknowledged ACK frame reaches the largest "
+          "ack-eliciting number",
+          "[net][net-path][quic][recovery]")
+{
+    QuicAckTracker tracker;
+    tracker.reset(QuicSpace::Application);
+    CHECK_FALSE(tracker.awaited_unreported());
+    CHECK(tracker.on_received(0U, false, Ecn::NotEct, 0U, kMaxAckDelay));       // ACK-only: awaits nothing
+    CHECK(tracker.on_received(1U, true, Ecn::NotEct, 0U, kMaxAckDelay, false)); // a PING alone: neither
+    CHECK_FALSE(tracker.awaited_unreported());
+    tracker.on_ack_acknowledged(1U);
+    CHECK(tracker.on_received(2U, true, Ecn::NotEct, 0U, kMaxAckDelay)); // data
+    CHECK(tracker.awaited_unreported());
+    CHECK(tracker.on_received(3U, true, Ecn::NotEct, 0U, kMaxAckDelay, false)); // a PING after it
+    CHECK(tracker.on_received(4U, false, Ecn::NotEct, 0U, kMaxAckDelay));
+    tracker.on_ack_acknowledged(2U); // short of the PING, the largest ack-eliciting number
+    CHECK(tracker.awaited_unreported());
+    tracker.on_ack_acknowledged(3U);
+    CHECK_FALSE(tracker.awaited_unreported());
+    CHECK_FALSE(tracker.on_received(4U, true, Ecn::NotEct, 0U, kMaxAckDelay)); // a copy changes nothing
+    CHECK_FALSE(tracker.awaited_unreported());
+    CHECK(tracker.on_received(6U, true, Ecn::NotEct, 0U, kMaxAckDelay));
+    CHECK(tracker.awaited_unreported());
+    tracker.reset(QuicSpace::Application);
+    CHECK_FALSE(tracker.awaited_unreported());
+}
+
 TEST_CASE("quic recovery: the RTT estimator follows RFC 9002 section 5", "[net][quic][recovery]")
 {
     QuicRtt rtt;
