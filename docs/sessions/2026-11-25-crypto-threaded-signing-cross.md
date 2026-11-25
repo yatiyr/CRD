@@ -28,12 +28,30 @@ fast exits with no output (0xC0000409, 9 of 106 crd-crypto events), which no raw
 - `provider-host-check.py --arms` runs only the named arms (unit-tested). It adds six arms.
 - `host-check.yml`: `provider_arms`; `provider_cpu=affected` (the default) runs only on Xeons from Sapphire Rapids on.
   There are ten legs.
-- Local win-asan (i9-14900K): every new mode is clean and every refused crossing prints its SETUP line.
+- `touch` (8f1e45aa, both programs; arm `cerid-touch`): before its first signing, each thread touches 512 KiB of its
+  stack, one page at a time.
+- Local win-asan (i9-14900K): every new mode is clean and every refused crossing prints its SETUP line. The
+  register entry now records the evidence below.
 
-## Evidence
+## Evidence (failures out of 40 runs)
 
-Pending: the dispatch on this commit.
+- 45553773567 (dc6705c1, Xeon Platinum 8573C):
+  - Failed: case 29; `cerid` 27; `seed-key` 26; `raw-verify` 26; `no-verify` 27.
+  - Clean (0): `control`, `control-copy`, `raw`, `raw-copy`, `raw-crd-verify`.
+  - So it is `SigningKey::sign` as crd-crypto runs it. The same calls written in the program pass. Neither the key's
+    seed nor the verification matters.
+- 45557190754 and 45557203999 (8f1e45aa, two Xeon 6973P-C; 45554828003 drew no affected CPU):
+  - `cerid` failed 27 and 25. `cerid-touch` failed 0 and 0, and `cerid-raw` 0 and 0.
+  - 10 of the 52 events were fast exits.
+- Each refusal is mldsa-native's rejection loop run to its bound: 65535/L attempts, about 13,100 for ML-DSA-65. So
+  every attempt of that one signing was rejected.
+- **Trigger:** the thread's first touch of new stack pages during the signing, at crd-crypto's call depth. It may be
+  those pages or their ASan shadow; the run does not separate them. The case has failed only under win-asan, on
+  Emerald and Granite Rapids Xeons.
 
 ## Next
 
-Read the dispatch, then fix the cause in crd-crypto, with teeth on the failing Xeons.
+1. A Cerid-free control that places the first signing at swept stack depths. A failing depth is the reproduction a TP
+   entry needs.
+2. Separate stack pages from shadow pages: touch only the stack (a `__chkstk`-probed frame).
+3. Then the handling. Whether a build without ASan can hit it is item 2's question.
