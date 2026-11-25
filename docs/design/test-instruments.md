@@ -318,7 +318,8 @@ order through the same tree's AWS-LC alone (plain, with a start gate that releas
 with the case's storage, both, and as `SigningKey::sign`'s and `ProviderVerifier::verify`'s exact calls), and
 `crd-mldsa-threads-cerid`, the case through crd-crypto's `SigningKey` without the test program (plain, gated, warmed by
 one signing on the main thread, with its signatures outside the engine's allocator, with its key from a raw seed,
-verified by raw calls or not at all), and the control's raw calls inside its own process (plain, as crd-crypto's exact
+verified by raw calls or not at all, and with each thread's stack touched, 512 KiB a page at a time, before its first
+signing: `cerid-touch`), and the control's raw calls inside its own process (plain, as crd-crypto's exact
 calls written in that program, and verified by `ProviderVerifier`). It runs
 [provider-host-check.py](../../scripts/provider-host-check.py): `provider_rounds` rounds (40 by default), each running
 every arm `provider_arms` names (every arm when empty) once alone in a fresh process, the case both directly and through
@@ -326,11 +327,12 @@ CTest, then `provider_parallel` processes at once when that is not 0. An event i
 a stall; the summary tallies runs, events, stalls and the slowest run per arm and phase, failing logs are uploaded, and
 a leg with an event fails. An event in a control arm is AWS-LC's on that machine, the reproduction a [third-party
 entry](../third-party-defects.md) needs. Events in the `crd-mldsa-threads-cerid` arms beside clean controls put the
-cause in a program that links crd-crypto: in crd-crypto's calls when its raw arm is clean, in that process when its raw
+cause in a program that links crd-crypto: on crd-crypto's path when its raw arm is clean, in that process when its raw
 arm fails too; events in the case alone put it in the test program. Between crd-crypto's arms, a crd-crypto signing that
 fails with its key from a raw seed and no verification, while the same calls written in the program (`raw-copy`) pass,
-puts it in how crd-crypto's provider code is built or placed rather than in what it calls. Clean legs mean too little exposure, never a
-verdict.
+leaves the code's build and placement and the thread's stack layout; a clean `cerid-touch` beside a failing `cerid`
+puts the trigger in the first signing's touch of new stack pages or their shadow. Clean legs mean too little exposure,
+never a verdict.
 
 The `experiment` input picks the legs (`all`, `fuzz`, `tsan`, `arm64-sanitizer-cost`, `x64-asan-stack-alignment`,
 `udp-ring`, `provider-threads`, `vulkan-sdk-installer`). The ARM64 sanitizer-cost legs

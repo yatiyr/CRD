@@ -18,8 +18,9 @@
 //                 verification are SigningKey::sign's and ProviderVerifier::verify's calls exactly, written in this
 //                 program's translation unit, and with "crd-verify" the raw signatures are verified by
 //                 ProviderVerifier.
-// A crd-crypto signing (SigningKey) with every other step raw failing while "raw copy" passes puts the fault in how
-// crd-crypto's provider code is built or placed, not in what it calls. Output as crd-mldsa-threads-control's
+// A crd-crypto signing (SigningKey) with every other step raw failing while "raw copy" passes leaves what differs
+// between them: where the code is built and placed, and the thread's stack layout (a raw session holds its 3,309-byte
+// stack signature in the object even when it signs into the heap). Output as crd-mldsa-threads-control's
 // (threads_harness.hpp).
 #include "raw_signing.hpp"
 #include "threads_harness.hpp"
