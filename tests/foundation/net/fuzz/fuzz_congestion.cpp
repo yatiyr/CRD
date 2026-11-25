@@ -33,14 +33,15 @@
 // maximum or 5 Mbit/s, one datagram at a time, with the probe's bytes over its window (less at the largest window),
 // and no other controller ever wants any. A window controller's burst is its initial window or, while its flight is
 // held back outside a recovery period, a millisecond of its pacing rate, at most its train cap and at least that
-// window, and the cap stays within that window and 64 KiB (packets carry the train offsets the input picks). The
-// sampler's delivered bytes are what was acknowledged. The pacer's release time is never before now, its credit stays
-// within one burst above zero and the last send's burst below, and is positive at its release time. A coupled NewReno
-// is its coupling's one member until a swap, and a twin uncoupled NewReno fed every same event keeps its state, window
-// and pacing rate to the byte (RFC 6356: one path is Reno).
+// window, and the cap stays within that window and one train of whole datagrams (packets carry the train offsets
+// the input picks). The sampler's delivered bytes are what was acknowledged. The pacer's release time is never before
+// now, its credit stays within one burst above zero and the last send's burst below, and is positive at its release
+// time. A coupled NewReno is its coupling's one member until a swap, and a twin uncoupled NewReno fed every same event
+// keeps its state, window and pacing rate to the byte (RFC 6356: one path is Reno).
 #include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/congestion.hpp>
+#include <crd/net/udp.hpp>
 
 #include <cstring>
 #include <new>
@@ -295,12 +296,13 @@ void check(const World& w)
     {
         // A window controller's burst: the initial window, or while its flight is held back a millisecond of its
         // rate, the initial window at least and its train cap at most (the proven length, within it, while a probe is
-        // out or a recovery period lasts). The cap stays within that window and 64 KiB (or is that window, when
-        // larger); before version 8 none is kept.
+        // out or a recovery period lasts). The cap stays within that window and the whole datagrams one host train
+        // carries (or is that window, when larger); before version 8 none is kept.
         const u64 quantum = w.ctl->pacing_rate(rtt) / 1000U;
         const u64 initial = congestion_initial_window(w.policy, w.datagram);
         const u64 cap = (w.policy.version >= 8U) ? state.train_cap : initial;
-        CRD_FUZZ_REQUIRE(cap >= initial && (cap <= 65536U || cap == initial));
+        const u64 train = (u64{crd::net::kMaxUdpPayloadV4} / w.datagram) * w.datagram;
+        CRD_FUZZ_REQUIRE(cap >= initial && (cap <= train || cap == initial));
         CRD_FUZZ_REQUIRE(w.policy.version >= 8U || state.train_cap == 0U);
         const u64 capped = (quantum < cap) ? quantum : cap;
         const u64 most = (capped > initial) ? capped : initial;

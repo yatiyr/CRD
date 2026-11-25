@@ -11,7 +11,9 @@ namespace
 {
 constexpr u32 kMaxBatch = 1024U;
 constexpr u32 kMaxQueueSlots = 65536U;
-constexpr usize kSendBatch = 32U; // datagrams one send() of a flush hands a socket at most
+// Datagrams one send() of a flush hands a socket at most: two of the host's longest trains, so a call carries whole
+// trains however a quantum's lie in it.
+constexpr usize kSendBatch = 2U * kMaxTrainDatagrams;
 constexpr u64 kAnswerRetryNs = 1000000U; // an answer the host was too busy to take is offered again within 1 ms
 } // namespace
 
@@ -196,32 +198,48 @@ SendFlush SendQueue::flush(const SocketSet& sockets) noexcept
 
 void SendQueue::send_through(DatagramSocket& socket, u32 index, SendFlush& flushed) noexcept
 {
-    OutgoingDatagram batch[kSendBatch];
-    u32 slots[kSendBatch];
+    // One datagram past the batch tells whether its last train goes on: a segmenting socket makes trains of each call
+    // (segment_train), so a batch ends before a train it would cut, and that train leaves whole in the next call.
+    OutgoingDatagram batch[kSendBatch + 1U];
+    u32 slots[kSendBatch + 1U];
+    u32 places[kSendBatch + 1U]; // each one's position in the order
     u32 position = 0U;
     for (;;)
     {
         usize count = 0U;
-        for (; position < m_queued && count < kSendBatch; ++position)
+        for (; position < m_queued && count <= kSendBatch; ++position)
         {
             const Entry& entry = m_entries[m_order[position]];
             if (!entry.done && entry.socket == index)
             {
                 batch[count] = entry.datagram;
+                places[count] = position;
                 slots[count++] = m_order[position];
             }
         }
-        const bool lends = socket.features().lent_send;
-        m_lenders[index] = lends ? &socket : m_lenders[index];
+        const SocketFeatures features = socket.features();
+        m_lenders[index] = features.lent_send ? &socket : m_lenders[index];
+        const bool more = count > kSendBatch;
+        if (more)
+        {
+            usize last = 0U; // where the train holding the datagram past the batch begins
+            for (usize at = 0U; features.segmented_send && at <= kSendBatch;)
+            {
+                last = at;
+                at += segment_train(cont::ConstSpan<OutgoingDatagram>(batch + at, count - at));
+            }
+            count = (last != 0U) ? last : kSendBatch;
+            position = places[count];
+        }
         for (usize at = 0U; at < count;)
         {
-            const u64 first = lends ? socket.sends_taken() : 0U;
+            const u64 first = features.lent_send ? socket.sends_taken() : 0U;
             const BatchResult result = socket.send_stable(cont::ConstSpan<OutgoingDatagram>(batch + at, count - at));
             for (usize sent = 0U; sent < result.count; ++sent)
             {
                 Entry& entry = m_entries[slots[at + sent]];
                 entry.done = true;
-                entry.lent = lends;
+                entry.lent = features.lent_send;
                 entry.number = first + sent;
             }
             at += result.count;
@@ -237,7 +255,7 @@ void SendQueue::send_through(DatagramSocket& socket, u32 index, SendFlush& flush
                 ++flushed.dropped;
             }
         }
-        if (count < kSendBatch)
+        if (!more)
         {
             return;
         }

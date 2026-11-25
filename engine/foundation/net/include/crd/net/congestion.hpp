@@ -66,8 +66,9 @@
 //               doubled in early slow start) with a burst of a millisecond of that rate for the window controllers,
 //               at least the initial window (section 7.7's limit, which binds a slow or long path) and at most the
 //               train cap unless that window is larger: the longest train the path's losses show it takes, from that
-//               window to 64 KiB, as BBR's send quantum and Linux's segmentation bursts are sized (BBR: its send
-//               quantum, Prague: 250 us of its rate), in exact integer credit.
+//               window to the whole datagrams one host train carries (an IPv4 UDP payload's, 44 of 1472 bytes), as
+//               BBR's send quantum is bounded and Linux's segmentation bursts are sized (BBR: its send quantum,
+//               Prague: 250 us of its rate), in exact integer credit.
 //   time        every call takes the time in nanoseconds; nothing reads a clock.
 //   threads     a controller and a pacer belong to their connection's thread.
 
@@ -232,7 +233,7 @@ struct CongestionState
     u64 queue_delay_ns = 0U;
     u64 queue_delay_target_ns = 0U;
     // NewReno and CUBIC: the longest train their send quantum may be, which the path's losses teach (from the initial
-    // window to 64 KiB); 0 for any other controller and before version 8.
+    // window to one host train of whole datagrams); 0 for any other controller and before version 8.
     u64 train_cap = 0U;
     CongestionPhase phase = CongestionPhase::SlowStart;
     bool limited = false; // the window or the pacer held sending back this round (RFC 9002 section 7.8)

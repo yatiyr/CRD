@@ -8,6 +8,7 @@
 #include <crd/hesap/net/queue_delay.hpp>
 #include <crd/hesap/net/rate.hpp>
 #include <crd/hesap/stats/philox.hpp>
+#include <crd/net/udp.hpp>
 
 #include <cstdint>
 #include <new>
@@ -47,8 +48,8 @@ constexpr u64 kCubicKScale = (kCubicCDenominator << (3U * kCubicTimeShift)) / kC
 static_assert(kCubicKScale * kCubicCNumerator == (kCubicCDenominator << (3U * kCubicTimeShift)));
 static_assert(kCongestionMaxWindow <= ~u64{0} / kCubicKScale);
 
-// A send quantum (draft-ietf-ccwg-bbr section 5.6.3): a millisecond of the pacing rate, at most one 64 KiB train.
-constexpr u64 kSendQuantumMax = 65536U;
+// A send quantum (draft-ietf-ccwg-bbr section 5.6.3): a millisecond of the pacing rate, at most one train
+// (quantum_max).
 constexpr u64 kSendQuantumNs = 1000000U;
 static_assert(kNanosPerSecond % kSendQuantumNs == 0U);
 // A send quantum of `rate` (bytes a second): rate * kSendQuantumNs / kNanosPerSecond exactly, by a constant divisor.
@@ -70,6 +71,17 @@ constexpr u32 kTrainDrainRounds = 2U; // a proven probe's length sent throughout
 [[nodiscard]] constexpr u64 max_u64(u64 a, u64 b) noexcept
 {
     return (a > b) ? a : b;
+}
+
+// A send quantum's most (section 5.6.3's 64 KiB, the host's segmentation unit): the whole datagrams of `datagram`
+// bytes one segmented train carries in an IPv4 UDP payload (udp.hpp), one at least. The pacer sends while credit is
+// left, so a quantum of whole datagrams ends at the last one and leaves as one train: 64 KiB of 1472-byte datagrams
+// was 44 the host segments and a 45th alone, two sends a quantum. Datagrams of QUIC's least size fit fewer than
+// kMaxTrainDatagrams.
+static_assert(kMaxUdpPayloadV4 / kQuicMinInitialDatagram <= kMaxTrainDatagrams);
+[[nodiscard]] constexpr u64 quantum_max(u64 datagram) noexcept
+{
+    return max_u64(u64{kMaxUdpPayloadV4} / datagram, 1U) * datagram;
 }
 
 // The integer cube root, rounded down (Hacker's Delight, figure 11-5).
@@ -110,7 +122,7 @@ public:
     {
         if (from.train_cap != 0U && m_trains)
         {
-            m_train_cap = max_u64(min_u64(from.train_cap, kSendQuantumMax), m_initial);
+            m_train_cap = max_u64(min_u64(from.train_cap, m_quantum_max), m_initial);
             m_train_proven = m_train_cap;
             m_train_before = m_train_cap;
             m_train_taught = true; // what another window controller learned grows on from it a datagram a round
@@ -337,7 +349,7 @@ public:
         }
         const u64 quantum = quantum_bytes(pacing_rate(rtt));
         const bool proven = m_probe_out || m_phase == CongestionPhase::Recovery;
-        return max_u64(min_u64(quantum, proven ? m_train_proven : m_train_cap), m_initial);
+        return max_u64(min_u64(min_u64(quantum, proven ? m_train_proven : m_train_cap), m_quantum_max), m_initial);
     }
 
     [[nodiscard]] CongestionState state() const noexcept override
@@ -393,6 +405,7 @@ protected:
 
     CongestionPolicy m_policy;
     u64 m_datagram = 0U;
+    u64 m_quantum_max = 0U; // quantum_max(m_datagram): the train cap's and the burst's most
     u64 m_minimum = 0U;
     u64 m_window = 0U;
     u64 m_threshold = kCongestionMaxWindow;
@@ -423,6 +436,7 @@ private:
     void size_windows(u64 max_datagram) noexcept
     {
         m_datagram = max_datagram;
+        m_quantum_max = quantum_max(max_datagram);
         m_initial = congestion_initial_window(m_policy, max_datagram);
         m_minimum = m_policy.minimum_packets * max_datagram;
     }
@@ -464,7 +478,7 @@ private:
     // on a path it knows absorbs it). It starts at the initial window, which is proven, and grows only from a proven
     // cap, and only after a round whose trains reached the proven length: an exact-timer host's ACK-clocked sends, a
     // datagram or two an instant, prove nothing longer, and a cap no train of theirs reaches is only pacer credit above
-    // the rate, which in slow start overflows a queue shallower than it. It doubles, to 64 KiB, until a loss teaches
+    // the rate, which in slow start overflows a queue shallower than it. It doubles, to a train, until a loss teaches
     // it, then grows a datagram once kTrainHoldRounds such rounds have gone clean at it. A growth is a probe of the
     // path in two steps. First its depth, one train long: the first train at or past the proven bytes is the probe,
     // every later one keeps to the proven bytes until the round after the probe's ends, and that round proves the
@@ -546,7 +560,7 @@ private:
             m_probe_since_ns = kNeverNs; // no probe is out: its period ends
         }
         if (m_train_drain != 0U || m_probe_out || m_probe_sent_before || m_train_proven + m_datagram <= m_train_cap ||
-            m_train_cap >= kSendQuantumMax || reached + m_datagram <= m_train_proven)
+            m_train_cap >= m_quantum_max || reached + m_datagram <= m_train_proven)
         {
             // A probe is out or being judged, the cap is unproven (a probe goes again), it is whole, or neither
             // round's trains reached the proven length, so nothing longer is asked for.
@@ -563,7 +577,7 @@ private:
             m_train_wait -= (longest + m_datagram > m_train_proven) ? 1U : 0U; // a round whose trains reached it
             return;
         }
-        m_train_cap = min_u64(m_train_taught ? m_train_cap + m_datagram : 2U * m_train_cap, kSendQuantumMax);
+        m_train_cap = min_u64(m_train_taught ? m_train_cap + m_datagram : 2U * m_train_cap, m_quantum_max);
     }
 
     void reduce_window(u64 now_ns, bool undoable) noexcept
@@ -1126,6 +1140,7 @@ private:
     void size(u64 max_datagram) noexcept
     {
         m_datagram = max_datagram;
+        m_quantum_max = quantum_max(max_datagram);
         m_minimum = m_policy.minimum_packets * max_datagram;
         m_min_pipe = max_u64(kBbrMinPipePackets * max_datagram, m_minimum);
         m_initial = congestion_initial_window(m_policy, max_datagram);
@@ -1136,7 +1151,7 @@ private:
     {
         m_cwnd = m_initial;
         m_pacing_rate = 0U;
-        m_send_quantum = min_u64(max_u64(m_initial, 2U * m_datagram), kSendQuantumMax);
+        m_send_quantum = min_u64(max_u64(m_initial, 2U * m_datagram), m_quantum_max);
         m_max_bw_filter = WindowedMax<u64>(kBbrMaxBwFilterCycles);
         m_max_bw = 0U;
         m_bw = 0U;
@@ -1777,7 +1792,7 @@ private:
     void set_send_quantum() noexcept
     {
         const u64 quantum = quantum_bytes(m_pacing_rate);
-        m_send_quantum = max_u64(min_u64(quantum, kSendQuantumMax), 2U * m_datagram);
+        m_send_quantum = max_u64(min_u64(quantum, m_quantum_max), 2U * m_datagram);
     }
 
     [[nodiscard]] u64 bdp() const noexcept
@@ -1857,8 +1872,9 @@ private:
     DeliveryRateSampler& m_delivery;
     hesap::stats::PhiloxRng m_rng;
     u64 m_datagram = 0U;
-    u64 m_minimum = 0U;  // RFC 9002's minimum window
-    u64 m_min_pipe = 0U; // BBR.MinPipeCwnd, at least the minimum window
+    u64 m_quantum_max = 0U; // quantum_max(m_datagram)
+    u64 m_minimum = 0U;     // RFC 9002's minimum window
+    u64 m_min_pipe = 0U;    // BBR.MinPipeCwnd, at least the minimum window
     u64 m_initial = 0U;
 
     // Control parameters.

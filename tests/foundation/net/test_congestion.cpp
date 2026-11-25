@@ -269,21 +269,22 @@ TEST_CASE("congestion: a held flight's burst is a millisecond of its pacing rate
     for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
     {
         INFO("algorithm " << static_cast<int>(algorithm));
-        // A grown window whose flight the window or the pacer held back, on a path whose trains of 64 KiB went
+        // A grown window whose flight the window or the pacer held back, on a path whose longest trains went
         // clean (the train cap): 1.25 * 400000 bytes / 10 ms is 50 MB a second, 50000 bytes a millisecond. Without
         // that cap, what no train has proven, the burst is the initial window.
         CongestionState grown;
         grown.window = 400000U;
         grown.limited = true;
         CHECK(Controller(policy_of(algorithm), kMss, &grown)->burst(rtt_of(10U * kMs, 10U * kMs)) == 12000U);
-        grown.train_cap = 65536U;
+        grown.train_cap = 65536U; // a saved cap past one train is held to it
+        constexpr u64 kTrain = 54U * kMss;
         const Controller fast(policy_of(algorithm), kMss, &grown);
         CHECK(fast->burst(rtt_of(10U * kMs, 10U * kMs)) == 50000U);
         CHECK(fast->burst(rtt_of(20U * kMs, 20U * kMs)) == 25000U);
-        // Faster still: one 64 KiB train at most. A slow or long path: the initial window (RFC 9002 section 7.7), as
-        // with no round trip or no pacing.
-        CHECK(fast->burst(rtt_of(kMs, kMs)) == 65536U);
-        CHECK(fast->burst(rtt_of(1U, 1U)) == 65536U);
+        // Faster still: one train at most, the 54 datagrams of 1200 bytes an IPv4 UDP payload carries. A slow or long
+        // path: the initial window (RFC 9002 section 7.7), as with no round trip or no pacing.
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == kTrain);
+        CHECK(fast->burst(rtt_of(1U, 1U)) == kTrain);
         CHECK(fast->burst(rtt_of(10U * kSecond, 10U * kSecond)) == 12000U);
         CHECK(fast->burst(rtt_of(0U, 0U)) == 12000U);
         const Controller unpaced(policy_of(algorithm, false, false), kMss, &grown);
@@ -300,20 +301,20 @@ TEST_CASE("congestion: a held flight's burst is a millisecond of its pacing rate
         fast.send(1U, 4U, kMs, kMss);
         CHECK(fast->burst(rtt_of(kMs, kMs)) == 12000U);
         fast->on_limited(false, kMs);
-        CHECK(fast->burst(rtt_of(kMs, kMs)) == 65536U);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == kTrain);
         fast.send(5U, 5U, kMs, 5U * kMss);
-        CHECK(fast->burst(rtt_of(kMs, kMs)) == 65536U);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == kTrain);
         // So does a flight the window itself holds: its next packet would not fit.
         fast.send(6U, 6U, 2U * kMs);
         REQUIRE(fast->burst(rtt_of(kMs, kMs)) == 12000U);
         fast.send(7U, 7U, 2U * kMs, fast->window() - kMss);
-        CHECK(fast->burst(rtt_of(kMs, kMs)) == 65536U);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == kTrain);
 
         // Nothing held back this round or the last (an application-limited sender): the initial window.
         const Controller limited(policy_of(algorithm), kMss, &grown);
         grown.limited = false;
         const Controller idle(policy_of(algorithm), kMss, &grown);
-        CHECK(limited->burst(rtt_of(kMs, kMs)) == 65536U);
+        CHECK(limited->burst(rtt_of(kMs, kMs)) == kTrain);
         CHECK(idle->burst(rtt_of(kMs, kMs)) == 12000U);
 
         // An initial window past the cap (datagrams of 65000 bytes, two of them) is still the floor.
@@ -322,6 +323,60 @@ TEST_CASE("congestion: a held flight's burst is a millisecond of its pacing rate
         jumbo->on_limited(false, 0U);
         CHECK(jumbo->burst(rtt_of(kMs, kMs)) == 130000U);
     }
+}
+
+TEST_CASE("congestion: a send quantum is at most the whole datagrams one host train carries, at every datagram size, "
+          "for the window controllers and BBR",
+          "[net][net-path][congestion]")
+{
+    // A window whose rate's millisecond passes any train (5 GB a second at a 1 ms round trip), seeded with the
+    // largest cap, so the train alone sizes the burst: an IPv4 UDP payload's whole datagrams, one at least.
+    struct Size
+    {
+        u64 datagram;
+        u64 train;
+    };
+    const Size sizes[] = {
+        {1472U, 44U * 1472U}, {1200U, 54U * 1200U}, {1280U, 51U * 1280U}, {9000U, 7U * 9000U}, {30000U, 2U * 30000U}};
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        INFO("algorithm " << static_cast<int>(algorithm));
+        CongestionState grown;
+        grown.window = 4000000U;
+        grown.limited = true;
+        grown.train_cap = 65536U;
+        for (const Size& size : sizes)
+        {
+            INFO("datagram " << size.datagram);
+            const Controller c(policy_of(algorithm), size.datagram, &grown);
+            CHECK(c->state().train_cap == size.train);
+            CHECK(c->burst(rtt_of(kMs, kMs)) == size.train);
+        }
+        // A full pacer at that burst releases one train at an instant: 44 datagrams of 1472 bytes, where 64 KiB of
+        // credit released a 45th the host sends alone.
+        const Controller ethernet(policy_of(algorithm), 1472U, &grown);
+        const u64 burst = ethernet->burst(rtt_of(kMs, kMs));
+        const u64 rate = ethernet->pacing_rate(rtt_of(kMs, kMs));
+        Pacer pacer;
+        u32 released = 0U;
+        while (pacer.release_ns(kSecond, rate, burst) == kSecond)
+        {
+            pacer.on_sent(1472U, kSecond, rate, burst);
+            ++released;
+        }
+        CHECK(released == 44U);
+        // A path whose datagram grows (the PMTU search): the cap learned at 1200 bytes holds no 45th 1472-byte one.
+        const Controller resized(policy_of(algorithm), kMss, &grown);
+        REQUIRE(resized->burst(rtt_of(kMs, kMs)) == 54U * kMss);
+        resized->set_max_datagram(1472U);
+        CHECK(resized->burst(rtt_of(kMs, kMs)) == 44U * 1472U);
+        resized->set_max_datagram(kMss);
+        CHECK(resized->burst(rtt_of(kMs, kMs)) == 54U * kMss);
+    }
+    // BBR's quantum, from its first: at least two datagrams and the initial window, at most one train, here one
+    // 40000-byte datagram, where 64 KiB held a datagram and a part of the next.
+    CHECK(Controller(policy_of(CongestionAlgorithm::Bbr), 40000U)->burst(rtt_of(kMs, kMs)) == 40000U);
+    CHECK(Controller(policy_of(CongestionAlgorithm::Bbr), kMss)->burst(rtt_of(kMs, kMs)) == 10U * kMss);
 }
 
 TEST_CASE("congestion: a burst past the initial window is at most half a flight that ran out of data, never below that "

@@ -104,31 +104,14 @@ public:
         return result;
     }
 
+    // A segmenting host's trains of what the call took are counted (offers.segmented_send).
     [[nodiscard]] BatchResult send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept override
     {
         ++send_calls;
-        BatchResult result;
-        for (const OutgoingDatagram& datagram : datagrams)
+        const BatchResult result = take(datagrams);
+        for (usize at = 0U; offers.segmented_send && at < result.count; ++trains)
         {
-            if (refuse_next)
-            {
-                refuse_next = false;
-                result.error = SocketError::Unreachable;
-                return result;
-            }
-            if (sent_count == busy_after || sent_count == kQueue)
-            {
-                result.error = SocketError::Busy;
-                return result;
-            }
-            Outbound& out = sent[sent_count++];
-            std::memcpy(out.datagram.bytes, datagram.bytes.data(), datagram.bytes.size());
-            out.datagram.size = datagram.bytes.size();
-            out.peer = datagram.peer;
-            out.ecn = datagram.ecn;
-            out.from = datagram.bytes.data();
-            ++result.count;
-            ++taken;
+            at += segment_train(datagrams.subspan(at, result.count - at));
         }
         return result;
     }
@@ -185,6 +168,7 @@ public:
     bool fail_receive = false;
     SocketFeatures offers;
     usize send_calls = 0U;
+    usize trains = 0U; // the messages a segmenting host made of what send() took (segment_train)
     usize stable_calls = 0U;
     usize waits = 0U;
     u64 taken = 0U;
@@ -192,6 +176,34 @@ public:
     usize release_waits = 0U;
 
 private:
+    [[nodiscard]] BatchResult take(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept
+    {
+        BatchResult result;
+        for (const OutgoingDatagram& datagram : datagrams)
+        {
+            if (refuse_next)
+            {
+                refuse_next = false;
+                result.error = SocketError::Unreachable;
+                return result;
+            }
+            if (sent_count == busy_after || sent_count == kQueue)
+            {
+                result.error = SocketError::Busy;
+                return result;
+            }
+            Outbound& out = sent[sent_count++];
+            std::memcpy(out.datagram.bytes, datagram.bytes.data(), datagram.bytes.size());
+            out.datagram.size = datagram.bytes.size();
+            out.peer = datagram.peer;
+            out.ecn = datagram.ecn;
+            out.from = datagram.bytes.data();
+            ++result.count;
+            ++taken;
+        }
+        return result;
+    }
+
     struct Inbound
     {
         Datagram datagram;

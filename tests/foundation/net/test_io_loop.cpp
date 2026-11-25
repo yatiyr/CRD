@@ -859,9 +859,79 @@ TEST_CASE("A send queue hands each socket its own datagrams in order: a busy one
     first.send_calls = 0U;
     flushed = queue.flush(set);
     CHECK(flushed.sent == 44U);
-    CHECK(first.send_calls == 2U); // 32 a call
+    CHECK(first.send_calls == 1U); // up to two of the host's longest trains a call
     CHECK(first.sent[43].datagram.bytes[0] == 43U);
     CHECK(queue.queued(0U) == 0U);
+}
+
+TEST_CASE("A send queue's call ends before a train it would cut, so a segmenting host takes each quantum whole, and "
+          "a socket that does not segment takes 128 datagrams a call",
+          "[net][io-loop][net-path]")
+{
+    CountingAllocator allocator;
+    SendQueue queue(allocator, 256U, kDatagramBytes);
+    REQUIRE(queue.ready());
+    VirtualSocket socket;
+    DatagramSocket* const one[] = {&socket};
+    const SocketSet set{ConstSpan<DatagramSocket*>(one)};
+    const auto push = [&](usize count, usize bytes, const Endpoint& peer)
+    {
+        for (usize index = 0U; index < count; ++index)
+        {
+            const Span<u8> room = queue.room(0U);
+            REQUIRE(room.size() >= bytes);
+            room[0] = static_cast<u8>(socket.sent_count + queue.queued());
+            REQUIRE(queue.push(bytes, peer, Ecn::Ect0));
+        }
+    };
+    const auto in_order = [&]
+    {
+        for (usize index = 0U; index < socket.sent_count; ++index)
+        {
+            if (socket.sent[index].datagram.bytes[0] != static_cast<u8>(index))
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // Four quanta of 44 datagrams of 1472 bytes (one IPv4 train each), a short one closing the second: the first call
+    // ends before the third quantum, which its 129th datagram shows goes on, and the second takes it and the fourth.
+    socket.offers.segmented_send = true;
+    push(88U, 1472U, kClient);
+    push(1U, 600U, kClient);
+    push(88U, 1472U, kClient);
+    SendFlush flushed = queue.flush(set);
+    CHECK(flushed.sent == 177U);
+    CHECK(socket.send_calls == 2U);
+    CHECK(socket.trains == 4U); // 44, then 44 and the short one that ends their train; then 44 and 44
+    CHECK(in_order());
+
+    // A batch whose last train ends at its end goes whole: 128 datagrams of 1000 bytes are two trains of 64.
+    const Endpoint other{IpAddress::v4(192, 0, 2, 10), 40000U};
+    socket.sent_count = 0U;
+    socket.send_calls = 0U;
+    socket.trains = 0U;
+    push(128U, 1000U, kClient);
+    push(1U, 1000U, other);
+    flushed = queue.flush(set);
+    CHECK(flushed.sent == 129U);
+    CHECK(socket.send_calls == 2U);
+    CHECK(socket.trains == 3U);
+    CHECK(in_order());
+
+    // Without segmentation the batch is cut where it fills, each datagram its own message.
+    socket.sent_count = 0U;
+    socket.send_calls = 0U;
+    socket.trains = 0U;
+    socket.offers.segmented_send = false;
+    push(177U, 1472U, kClient);
+    flushed = queue.flush(set);
+    CHECK(flushed.sent == 177U);
+    CHECK(socket.send_calls == 2U);
+    CHECK(socket.trains == 0U);
+    CHECK(in_order());
 }
 
 TEST_CASE("A send queue keeps every socket's order and accounts for every datagram under random busy, refusing "
