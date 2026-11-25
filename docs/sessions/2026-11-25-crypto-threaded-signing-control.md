@@ -1,4 +1,4 @@
-# 2026-11-25: NET.2, a Cerid-free control for win-asan's threaded ML-DSA signing refusal
+# 2026-11-25: NET.2, win-asan's threaded ML-DSA signing refusal reproduced and split
 
 <!-- doc-role: evidence -->
 > Dated evidence; no live status. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
@@ -8,28 +8,44 @@ Follows [the register entry](2026-11-11-crypto-threaded-signing-register.md). Op
 win-asan leg that runs the same threaded signing through AWS-LC alone.
 
 **CI first:** CI 45496952342 (a3928095) failed only win-asan shard 1, on
-`Provider: one verifier and one key serve several threads`. It is the fourth sighting: one thread's first signing was
-refused after 11,266 ms and a second signing at once succeeded (case 11.6 s). No other job failed; win-release,
-win-shipping and win-asan shard 2 were still running.
+`Provider: one verifier and one key serve several threads`. It is the fourth sighting, on a Xeon 6973P-C: one
+thread's first signing was refused after 11,266 ms, and a second signing at once succeeded.
 
 ## What landed
 
-- `tests/foundation/crypto/control/mldsa_threads_control.cpp`, target `crd-mldsa-threads-control` (EXCLUDE_FROM_ALL,
-  links only `crypto` and the warning set). It makes the case's provider calls in the case's order: `RAND_bytes` seed,
-  `EVP_PKEY_pqdsa_new_raw_private_key`, four threads × 8 × (`EVP_DigestSignInit` with no digest, `EVP_DigestSign`, verify
-  through a fresh public key). It prints each thread's first-signing time, the refused call, the error queue and the
-  second signing's answer. crd-crypto installs nothing into AWS-LC (grep: no allocator, RNG or thread hooks, no init).
-- `scripts/provider-host-check.py`: per round, both arms in fresh processes (every sighting was a first signing),
-  once alone and then `--parallel` at once with the arms alternating. Each run is timed to its own exit, and runs
-  over 5 s count as stalls. It exits 1 on any event. Unit test in `test-repository-tools.py`.
-- `host-check.yml`: experiment `provider-threads`, two `windows-2025` legs on `win-asan`, input `provider_rounds`
-  (150). `test-instruments.md` says how to read the arms. The register entry records the fourth sighting.
-- Local check (win-asan, MSVC, this PC; it proves the tool only): the control built warning-clean and ran clean
-  (first signings 4-24 ms).
+- `tests/foundation/crypto/control/` holds three EXCLUDE_FROM_ALL programs, none of them a CTest:
+  - `crd-mldsa-threads-control` links only `crypto`. It runs the case's provider calls in the case's order. Its modes are
+    `gate` (the four first signings released together) and `storage` (the case's stack digest context and heap
+    signature).
+  - `crd-mldsa-threads-cerid` runs the case through `SigningKey` with no Catch2. Its modes are `gate`, `warm` (one
+    signing on the main thread first) and `std-buffer` (signatures outside the engine's allocator).
+  - `threads_harness.hpp` holds the shape both share.
+  - crd-crypto installs nothing into AWS-LC: a grep finds no allocator, RNG or thread hook and no init call.
+- `scripts/provider-host-check.py` runs every arm in fresh processes. The case runs directly and through CTest. An
+  optional contended phase is available. It has a unit test.
+- `host-check.yml`: experiment `provider-threads`, six `windows-2025` win-asan legs.
+
+## Evidence
+
+- **Host check 45521504985** (150 rounds, alone and four at once): the case failed on both Intel machines.
+  - Xeon Platinum 8573C: 89/150 alone, 202/300 contended.
+  - Xeon 6973P-C: 91/150 alone, 212/300 contended.
+  - The Cerid-free control was clean in all 900 runs; its slowest run took 1.23 s.
+  - All 828 failed assertions are iteration 0. Every refused signing took 9.7-18.1 s, and a second signing at once
+    succeeded. One thread signed, but its signature failed verification twice.
+- **Host check 45529742859** (40 rounds of all ten arms): it drew AMD EPYC 7763 and 9V45. Every arm was clean, the case
+  included (its slowest run 1.03 s).
+- **Host check 45531196275** (six legs): every leg drew AMD EPYC (7763, 9V74 four times, 9V45), and every arm was
+  clean.
+- The fault follows Intel Xeon runners, not the case alone. So the step (2) TP entry is off. The register entry no
+  longer says the fault comes from below Cerid.
+- Locally (i9-14900K, MSVC 19.51, also under SDE `-gnr`) every arm is clean. That proves only the tool.
 
 ## Next
 
-Dispatch `provider-threads` on yatiyr/CRD once GitHub's main holds this commit, then audit it. Control event: admit a
-TP entry and make the gate express an intermittent registered failure that retires when the control stops
-reproducing. Events in the case only, with the control clean: crd-crypto's cause, fixed with teeth. Both clean: more
-exposure, no verdict. Then NET-PATH's `min_mtu` trace ([LEO case](2026-11-25-net-path-leo-case-trace.md), Next 1).
+Redispatch `provider-threads` until a leg draws an Intel Xeon. On that leg the arms decide:
+- a control arm fails: a TP entry with an intermittent-gate design;
+- only the `cerid` arms fail: a crd-crypto fix, with teeth;
+- only the case fails: the test program is the cause.
+
+Then NET-PATH's `min_mtu` trace ([LEO case](2026-11-25-net-path-leo-case-trace.md), Next 1).
