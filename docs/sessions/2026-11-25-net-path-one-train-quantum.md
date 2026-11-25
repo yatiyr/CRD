@@ -12,9 +12,10 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path), Remaining item "crd-net's bulk pa
 45638204334 (cc2c0851, the first with the ACK rule) is pending.
 
 **Next 2, GCC's blind LEO run:** scatter, closed. Over the fixture's seeds (they repeat modulo 4), the spike case's
-blind GCC with the ACK rule against it reverted: 19.62/19.78, 15.39/15.42, 20.00/19.86, 20.20/19.31 s; aware GCC is
-faster on three seeds and level on one, the 25 ms step's aware run faster on all four. Seed 3's committed margins:
-`reads_more_after` 10%, SCReAM's elapsed 41 ms (deterministic).
+blind GCC with the ACK rule against it reverted: 19.62/19.78, 15.39/15.42, 20.00/19.86, 20.20/19.31 s; the 25 ms
+step's blind run 23.34/23.90, 24.38/24.07, 24.22/23.92, 23.75/23.40 s (+0.4% summed); every aware run is faster or
+level (spike 3 of 4, step 4 of 4). Seed 3's thinnest committed margin is SCReAM's bytes after a handover, 2.2%
+(deterministic); GCC's is 10%.
 
 ## Landed
 
@@ -42,10 +43,11 @@ faster on three seeds and level on one, the 25 ms step's aware run faster on all
   row; the same at 250 us turns 59.24% against 58.40%, drops +3.3%, rows scattering both ways; the 250 us, 32 KiB, 2 ms
   row over eight seeds spans 58.6 to 63.9% against 59.3 to 61.5%.
 - Tests: the cap and burst at five datagram sizes, a resize, a full pacer releasing 44 not 45; a call boundary keeping
-  trains whole (4 trains in 2 calls where 32-datagram calls made 7 in 6). Teeth: a 64 KiB `quantum_max` fails 12
+  trains whole (4 trains in 2 calls where 32-datagram calls made 7 in 6), with a busy host and a refusal inside a cut
+  batch keeping order. Teeth: a 64 KiB `quantum_max` fails 12
   assertions (45 released); a batch that ignores trains makes 5. Debug crd-net-tests 1,213 cases pass (8 RIO skipped),
-  MSVC `[io-loop],[congestion],[recovery],[handover]` pass, guards 19 (Linux) and 20 (MSVC). The congestion fuzzer's
-  oracle bounds the cap by the train: 214,025 runs clean; connection 6,795 clean.
+  MSVC `[io-loop],[congestion],[recovery],[handover],[udp]` and the Registered I/O cases pass, guards 19 (Linux) and
+  20 (MSVC). The congestion fuzzer's oracle bounds the cap by the train: 214,025 runs clean; connection 6,795 clean.
 
 ## Next
 
