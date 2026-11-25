@@ -16,7 +16,6 @@
 
 #include "threads_harness.hpp"
 
-#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -121,6 +120,19 @@ inline void describe_refusal(const char* refused, char* reason, std::size_t size
     ERR_clear_error();
 }
 
+// A session's in-object signature bytes, laid out as std::array's (one empty byte when there are none).
+template <std::size_t Inline> struct InlineBytes
+{
+    std::uint8_t bytes[Inline] = {};
+
+    std::uint8_t* data() { return bytes; }
+};
+
+template <> struct InlineBytes<0U>
+{
+    std::uint8_t* data() { return nullptr; }
+};
+
 // One thread's signing state: plain (a heap context, the signature in the session's `Inline` bytes on the thread's
 // stack) or the case's storage; a slim session (`Inline` 0) has only the case's.
 template <std::size_t Inline> struct Session
@@ -128,7 +140,7 @@ template <std::size_t Inline> struct Session
     EVP_PKEY* key = nullptr;
     const std::uint8_t* public_key = nullptr;
     const Options* options = nullptr;
-    std::array<std::uint8_t, Inline> stack_signature = {};
+    InlineBytes<Inline> stack_signature = {};
     std::unique_ptr<std::uint8_t[]> heap_signature;
     std::size_t length = 0U;
 

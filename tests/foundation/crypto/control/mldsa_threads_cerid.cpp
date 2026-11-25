@@ -28,7 +28,6 @@
 #include <crd/containers/array.hpp>
 #include <crd/crypto/provider.hpp>
 
-#include <array>
 #include <cstdio>
 #include <memory>
 
@@ -100,7 +99,7 @@ struct Session
 // "pad": a session holding a raw session's in-object signature bytes beside its own.
 struct PaddedSession : Session
 {
-    std::array<u8, mldsa_threads::raw::kSignature> pad = {};
+    u8 pad[mldsa_threads::raw::kSignature] = {};
 };
 
 // "raw crd-verify": a raw signature verified by ProviderVerifier.
