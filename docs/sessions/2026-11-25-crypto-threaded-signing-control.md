@@ -31,7 +31,7 @@ thread's first signing was refused after 11,266 ms, and a second signing at once
   - Xeon Platinum 8573C: 89/150 alone, 202/300 contended.
   - Xeon 6973P-C: 91/150 alone, 212/300 contended.
   - The Cerid-free control was clean in all 900 runs; its slowest run took 1.23 s.
-  - All 828 failed assertions are iteration 0. Every refused signing took 9.7-18.1 s, and a second signing at once
+  - All 828 failed assertions are iteration 0. All 827 refused signings took 9.5-22.4 s, and each second signing at once
     succeeded. One thread signed, but its signature failed verification twice.
 - **Host check 45529742859** (40 rounds of all ten arms): it drew AMD EPYC 7763 and 9V45. Every arm was clean, the case
   included (its slowest run 1.03 s).
