@@ -131,12 +131,13 @@ endif()
 
 # The host check's provider legs (docs/design/test-instruments.md#host-separation-diag10a): the threaded ML-DSA-65
 # signing case's provider calls through this tree's own AWS-LC libcrypto alone (the Cerid-free control), and the case
-# through crd-crypto without the test program, with the tree's flags and the engine's warning set. Built only on
-# request (scripts/provider-host-check.py runs them); never CTests.
+# through crd-crypto without the test program (which also makes the control's calls in its own process, so it links
+# AWS-LC too), with the tree's flags and the engine's warning set. Built only on request
+# (scripts/provider-host-check.py runs them); never CTests.
 add_executable(crd-mldsa-threads-control EXCLUDE_FROM_ALL control/mldsa_threads_control.cpp)
 target_link_libraries(crd-mldsa-threads-control PRIVATE crd-warnings crypto)
 add_executable(crd-mldsa-threads-cerid EXCLUDE_FROM_ALL control/mldsa_threads_cerid.cpp)
-target_link_libraries(crd-mldsa-threads-cerid PRIVATE crd-warnings crd-crypto crd-containers crd-core)
+target_link_libraries(crd-mldsa-threads-cerid PRIVATE crd-warnings crd-crypto crd-containers crd-core crypto)
 
 # The policy decoder and store, the provider and the TLS sessions under the bounded fuzz harness, with their committed
 # corpora.

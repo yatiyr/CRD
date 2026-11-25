@@ -5561,7 +5561,7 @@ class TestInstruments(unittest.TestCase):
             self.assertEqual((rows[0]['runs'], rows[0]['stalls'], rows[1]['runs'], rows[1]['events']), (1, 1, 2, 1))
             self.assertEqual([arm[0] for arm in provider_host_check.ARMS],
                              ['case', 'case-ctest', 'control', 'control-gate', 'control-storage', 'control-gate-storage',
-                              'cerid', 'cerid-gate', 'cerid-warm', 'cerid-std-buffer'])
+                              'cerid', 'cerid-gate', 'cerid-warm', 'cerid-std-buffer', 'cerid-raw'])
             self.assertEqual(provider_host_check.compiler_of(scratch), 'unknown')
             (scratch / 'CMakeFiles/4.4.5').mkdir(parents=True)
             (scratch / 'CMakeFiles/4.4.5/CMakeCXXCompiler.cmake').write_text(

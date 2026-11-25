@@ -40,17 +40,21 @@ thread's first signing was refused after 11,266 ms, and a second signing at once
   clean.
 - The fault follows Intel Xeon runners. The lane agrees: the case passed on the AMD EPYC win-asan shards of
   45466383581, 45358207939 and 45496952342 (7763, 9V74) and failed on that run's Xeon 6973P-C shard.
-- The plain control does not reproduce it. The gate and storage arms have not run on an Intel machine, so no TP entry
-  is written and the register entry no longer says the fault comes from below Cerid. Nothing is gated, so win-asan
-  stays red whenever its shard draws an Intel Xeon.
+- **Host check 45542990858** (six CPU-gated legs; five drew AMD and stopped): leg 2 drew a Xeon 6973P-C.
+  - Every control arm was clean (0/160: plain, gate, storage, gate+storage).
+  - Every arm that links crd-crypto failed: case 29/40, case through CTest 25/40, `cerid` 27/40, gated 30/40, warmed
+    27/40, std-buffer 26/40.
+  - So the cause is not AWS-LC alone, not Catch2 or the test program, not the key's first use and not the engine's
+    allocator. No TP entry. Nothing is gated, so win-asan stays red whenever its shard draws an Intel Xeon.
+- Landed after it: a `raw` mode of `crd-mldsa-threads-cerid` (arm `cerid-raw`) that makes the control's AWS-LC calls
+  (now shared in `raw_signing.hpp`) inside the crd-crypto-linked program.
 - Locally (i9-14900K, MSVC 19.51, also under SDE `-gnr`) every arm is clean. That proves only the tool.
 
 ## Next
 
-Redispatch `provider-threads` until a leg draws an Intel Xeon (a leg on AMD now stops after about a minute). On that
-leg the arms decide:
-- a control arm fails: a TP entry with an intermittent-gate design;
-- only the `cerid` arms fail: a crd-crypto fix, with teeth;
-- only the case fails: the test program is the cause.
+Redispatch `provider-threads` (CPU-gated) until a leg draws an Intel Xeon. On that leg `cerid-raw` decides:
+- it fails: the cause is the process of a program linking crd-crypto (a static initialiser, a TLS callback or a
+  symbol the linked engine libraries supply); bisect the linked libraries.
+- it is clean: the cause is crd-crypto's own compiled calls; bisect `SigningKey::sign`'s path and fix it with teeth.
 
 Then NET-PATH's `min_mtu` trace ([LEO case](2026-11-25-net-path-leo-case-trace.md), Next 1).

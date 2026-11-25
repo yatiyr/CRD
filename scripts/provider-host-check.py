@@ -8,11 +8,12 @@ win-asan-ml-dsa-threaded-signing-refused). This driver splits the refusal betwee
 program. Every round runs each arm once alone, in a fresh process (every sighting was a thread's first signing): the
 case from crd-crypto-tests, directly and through CTest (as the lane runs it); crd-mldsa-threads-control, the same
 provider calls through the same tree's AWS-LC alone, plain, with its threads' first signings released together (gate)
-and with the case's storage (storage); and crd-mldsa-threads-cerid, the case through crd-crypto's SigningKey without
-the test program, plain, gated, warmed by one signing on the main thread (warm) and with its signatures outside the
-engine's allocator (std-buffer). With --parallel N a round then runs N processes at once, the arms in turn, as
-CTest's parallel jobs load the lane. An event is a nonzero exit, a timeout or a missing pass line; a stall is a run
-over STALL_SECONDS, counted apart. The driver exits 1 when any run had an event. It builds nothing.
+and with the case's storage (storage); and crd-mldsa-threads-cerid, the case through crd-crypto's SigningKey without the
+test program, plain, gated, warmed by one signing on the main thread (warm) and with its signatures outside the engine's
+allocator (std-buffer), and the control's raw AWS-LC calls made inside it (raw). With --parallel N a round then runs N
+processes at once, the arms in turn, as CTest's parallel jobs load the lane. An event is a nonzero exit, a timeout or a
+missing pass line; a stall is a run over STALL_SECONDS, counted apart. The driver exits 1 when any run had an event. It
+builds nothing.
 
     python scripts/provider-host-check.py --build build/win-asan --rounds 40 --scratch <dir> --json <file> \
         --summary "$GITHUB_STEP_SUMMARY"
@@ -46,7 +47,8 @@ ARMS = (('case', 'tests/crypto/crd-crypto-tests' + SUFFIX, (CASE,), 'All tests p
         ('cerid', CERID, (), 'result: clean'),
         ('cerid-gate', CERID, ('gate',), 'result: clean'),
         ('cerid-warm', CERID, ('warm',), 'result: clean'),
-        ('cerid-std-buffer', CERID, ('std-buffer',), 'result: clean'))
+        ('cerid-std-buffer', CERID, ('std-buffer',), 'result: clean'),
+        ('cerid-raw', CERID, ('raw',), 'result: clean'))
 FAULT = re.compile(r'FAULT at iteration.*|signing refused after \d+ ms.*|FAILED:.*|==\d+==ERROR.*|result: SETUP.*')
 FIRST_SIGNING = re.compile(r'first signing (\d+) ms')
 STALL_SECONDS = 5.0

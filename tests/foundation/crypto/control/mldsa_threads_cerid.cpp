@@ -6,8 +6,11 @@
 // fault here is crd-crypto's use of the provider and a fault only in the case is the test program's. Arguments:
 // "gate" holds the threads at a start gate until all four exist; "warm" signs once on the main thread before they
 // start, so no thread's signing is the key's first; "std-buffer" keeps each thread's signature in a std::unique_ptr
-// array instead of a containers::Array (the engine's allocator). Output as crd-mldsa-threads-control's
+// array instead of a containers::Array (the engine's allocator); "raw" makes crd-mldsa-threads-control's AWS-LC calls
+// (raw_signing.hpp) instead of crd-crypto's, inside this program, so a fault there is this program's process and not
+// crd-crypto's calls. Output as crd-mldsa-threads-control's
 // (threads_harness.hpp).
+#include "raw_signing.hpp"
 #include "threads_harness.hpp"
 
 #include <crd/containers/array.hpp>
@@ -63,11 +66,15 @@ struct Session
 
 int main(int argc, char** argv)
 {
-    const char* const names[] = {"gate", "warm", "std-buffer"};
-    bool flags[] = {false, false, false};
-    if (!mldsa_threads::parse_flags(argc, argv, names, flags, 3U))
+    const char* const names[] = {"gate", "warm", "std-buffer", "raw"};
+    bool flags[] = {false, false, false, false};
+    if (!mldsa_threads::parse_flags(argc, argv, names, flags, 4U))
     {
         return 2;
+    }
+    if (flags[3])
+    {
+        return mldsa_threads::raw::run(flags[0], false);
     }
     const ProviderVerifier verifier;
     SigningKey key;
