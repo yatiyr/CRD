@@ -353,7 +353,7 @@ void QuicPathControl::on_acked(QuicSpace space, const QuicSentPacket& packet, u6
     }
     else if (space == QuicSpace::Application)
     {
-        m_pmtu.on_acked(packet.number, packet.bytes);
+        m_pmtu.on_acked(packet.sent_ns, packet.bytes);
     }
     if (packet.in_flight)
     {
@@ -392,7 +392,7 @@ QuicPathSignals QuicPathControl::on_lost(QuicSpace space, const QuicSentPacket& 
     }
     if (space == QuicSpace::Application)
     {
-        m_pmtu.on_lost(packet.number, packet.bytes);
+        m_pmtu.on_lost(packet.sent_ns, packet.bytes);
     }
     if (packet.in_flight)
     {
@@ -418,7 +418,7 @@ void QuicPathControl::on_spurious(QuicSpace space, const QuicSentPacket& packet,
     }
     if (space == QuicSpace::Application)
     {
-        m_pmtu.on_acked(packet.number, packet.bytes); // a large packet arrived: no black hole behind it
+        m_pmtu.on_acked(packet.sent_ns, packet.bytes); // a large packet arrived: no black hole behind it
     }
     // A handover's loss reduced nothing, so its arrival undoes nothing.
     if (packet.in_flight && !packet.handover)
@@ -452,17 +452,18 @@ QuicPathSignals QuicPathControl::on_ack_end(QuicSpace space, const QuicAck& ack,
     }
     // An RTT a scheduled handover may have lengthened is the estimate's, never a delay signal.
     m_controller->on_ack_end(rtt, outcome.rtt_sampled && !outcome.rtt_handover, in_flight, now_ns);
-    end_detection(outcome.lost, now_ns);
+    end_detection(outcome.lost, rtt, now_ns);
     return signals;
 }
 
-void QuicPathControl::end_detection(const QuicLoss& lost, u64 now_ns) noexcept
+void QuicPathControl::end_detection(const QuicLoss& lost, const QuicRtt& rtt, u64 now_ns) noexcept
 {
     if (lost.persistent_congestion)
     {
         m_controller->on_persistent_congestion(now_ns);
     }
-    static_cast<void>(m_pmtu.end_detection(now_ns));
+    const u64 round_trip = (rtt.latest_ns > rtt.smoothed_ns) ? rtt.latest_ns : rtt.smoothed_ns;
+    static_cast<void>(m_pmtu.end_detection(now_ns, round_trip));
     apply_size();
 }
 

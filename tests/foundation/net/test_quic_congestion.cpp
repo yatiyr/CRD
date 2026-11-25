@@ -2103,6 +2103,8 @@ struct LeoLink
     u64 measure_from_ns = 0U;                  // handovers before then are not measured
     u64 after_ns = kLeoAfter;                  // what is measured after each
     u64 stop_ns = kNeverNs;                    // no handover from then
+    u64 first_ns = kLeoFirst;                  // the first handover, from confirmation
+    usize seed = 3U;                           // the fixture's
 };
 
 // What a transfer over a LEO link showed.
@@ -2136,11 +2138,11 @@ std::ostream& operator<<(std::ostream& out, const LeoRun& run)
 }
 
 // The client sends `total` bytes over a 10 Mbit/s link with 40 ms round trips and a queue of one bandwidth-delay
-// product, its first handover 3 s after confirmation and then every 15 s (Starlink's period); both ends ask for
-// `times` receive timestamps an ACK frame.
+// product, its handovers the link's (by default the first 3 s after confirmation and then every 15 s, Starlink's
+// period); both ends ask for `times` receive timestamps an ACK frame.
 LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& link, Aware aware, u64 times = 0U)
 {
-    Pair pair(policy, 3U, false, times, times);
+    Pair pair(policy, link.seed, false, times, times);
     for (Path& path : pair.net->path)
     {
         path.delay_ns = kLeoOneWay;
@@ -2149,7 +2151,7 @@ LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& li
     pair.net->path[0].buffer = kLeoRate / 1000U * 40U;
     pair.confirm();
     const u64 start = pair.net->now;
-    Handovers handovers(*pair.net, start + kLeoFirst, link.period_ns, link.outage_ns, link.spike_ns, link.spike_for_ns);
+    Handovers handovers(*pair.net, start + link.first_ns, link.period_ns, link.outage_ns, link.spike_ns, link.spike_for_ns);
     handovers.drop_at = (link.genuine_at_ns == kNeverNs) ? kNeverNs : start + link.genuine_at_ns;
     handovers.stop_at = (link.stop_ns == kNeverNs) ? kNeverNs : start + link.stop_ns;
     pair.net->filter = &handovers;
@@ -2214,7 +2216,7 @@ LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& li
     if (run.learned)
     {
         // The handovers' phase on the clock, read the way the learner's period folds it.
-        const u64 first = start + kLeoFirst;
+        const u64 first = start + link.first_ns;
         const u64 truth = (first + ((pair.net->now - first) / link.period_ns) * link.period_ns) % learn_period;
         const u64 d = (pair.client.handover().phase_ns + learn_period - truth) % learn_period;
         run.phase_offset_ns = (d <= learn_period / 2U) ? static_cast<i64>(d) : -static_cast<i64>(learn_period - d);
@@ -2256,6 +2258,41 @@ TEST_CASE("QUIC handover: CUBIC and BBR keep their windows through a LEO link's 
         // The handovers' losses never pass for a black hole: the path MTU search keeps its size.
         CHECK(blind.min_mtu == kQuicDefaultMaxDatagram);
         CHECK(aware.min_mtu == kQuicDefaultMaxDatagram);
+    }
+}
+
+TEST_CASE("QUIC handover: a LEO link's delay spikes every 2 s reorder trains behind small packets, which pass for no "
+          "black hole",
+          "[net][net-path][quic-connection][quic-pmtu][handover]")
+{
+    // Each spike's end lets a small packet sent after it overtake the paced train sent before it, and RFC 9002's time
+    // threshold declares the train lost a packet a detection: three suspect detections within 2 ms, which the path MTU
+    // search took for a black hole in 13 of 48 such runs before a black hole's losses had to span a round trip.
+    struct Leo
+    {
+        CongestionAlgorithm algorithm;
+        usize seed;
+        u64 first_ms;
+        Aware aware;
+    };
+    const Leo runs[] = {{CongestionAlgorithm::Cubic, 1U, 5000U, Aware::None},
+                        {CongestionAlgorithm::Cubic, 1U, 5000U, Aware::True},
+                        {CongestionAlgorithm::Bbr, 2U, 3500U, Aware::None}};
+    for (const Leo& leo : runs)
+    {
+        INFO("algorithm " << static_cast<u32>(leo.algorithm) << ", seed " << leo.seed << ", first handover "
+                          << leo.first_ms << " ms, schedule " << static_cast<u32>(leo.aware));
+        CongestionPolicy policy;
+        policy.algorithm = leo.algorithm;
+        LeoLink link;
+        link.period_ns = 2000U * kMs;
+        link.after_ns = 500U * kMs;
+        link.first_ns = leo.first_ms * kMs;
+        link.seed = leo.seed;
+        const LeoRun run = leo_transfer(policy, 24U << 20U, link, leo.aware);
+        INFO(run);
+        CHECK(run.handovers_lost >= 80U);
+        CHECK(run.min_mtu == kQuicDefaultMaxDatagram);
     }
 }
 

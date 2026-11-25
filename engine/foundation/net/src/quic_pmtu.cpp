@@ -177,48 +177,57 @@ void QuicPathMtu::on_probe_lost(u32 bytes, u64 now_ns) noexcept
     search(now_ns);
 }
 
-void QuicPathMtu::on_acked(u64 number, u32 bytes) noexcept
+void QuicPathMtu::on_acked(u64 sent_ns, u32 bytes) noexcept
 {
-    if (bytes <= kQuicPmtuFloor || number + 1U <= m_large_acked)
+    if (bytes <= kQuicPmtuFloor || sent_ns + 1U <= m_large_after_ns)
     {
         return;
     }
-    m_large_acked = number + 1U;
-    // A larger packet acknowledged after a suspect detection's losses: they were congestion, not the path.
+    m_large_after_ns = sent_ns + 1U;
+    // A larger packet acknowledged that left after a suspect detection's losses: they were congestion, not the path.
     u32 kept = 0U;
     for (u32 index = 0U; index < m_suspect_count; ++index)
     {
-        if (m_suspects[index] >= m_large_acked)
+        if (m_suspect_sent_ns[index] >= m_large_after_ns)
         {
-            m_suspects[kept++] = m_suspects[index];
+            m_suspect_sent_ns[kept++] = m_suspect_sent_ns[index];
         }
     }
     m_suspect_count = kept;
 }
 
-void QuicPathMtu::on_lost(u64 number, u32 bytes) noexcept
+void QuicPathMtu::on_lost(u64 sent_ns, u32 bytes) noexcept
 {
     if (bytes <= kQuicPmtuFloor)
     {
         m_burst_small = true;
         return;
     }
-    m_burst_oldest = (number < m_burst_oldest) ? number : m_burst_oldest;
+    m_burst_sent_ns = (sent_ns < m_burst_sent_ns) ? sent_ns : m_burst_sent_ns;
 }
 
-bool QuicPathMtu::end_detection(u64 now_ns) noexcept
+bool QuicPathMtu::end_detection(u64 now_ns, u64 rtt_ns) noexcept
 {
-    const u64 oldest = m_burst_oldest;
+    const u64 sent_ns = m_burst_sent_ns;
     const bool small = m_burst_small;
-    m_burst_oldest = kNeverNs;
+    m_burst_sent_ns = kNeverNs;
     m_burst_small = false;
     const bool raised = m_state == QuicPmtuState::Searching || m_state == QuicPmtuState::SearchComplete;
-    if (oldest == kNeverNs || small || !raised || m_size == kQuicPmtuFloor || oldest < m_large_acked)
+    if (sent_ns == kNeverNs || small || !raised || m_size == kQuicPmtuFloor || sent_ns < m_large_after_ns)
     {
         return false;
     }
-    m_suspects[m_suspect_count++] = oldest;
-    if (m_suspect_count < kQuicPmtuBlackHoleDetections)
+    // Held full, the newest replaces the newest: the oldest kept begin the span.
+    const u32 slot = (m_suspect_count < kQuicPmtuBlackHoleDetections) ? m_suspect_count++ : m_suspect_count - 1U;
+    m_suspect_sent_ns[slot] = sent_ns;
+    u64 first_ns = sent_ns;
+    for (u32 index = 0U; index < m_suspect_count; ++index)
+    {
+        first_ns = (m_suspect_sent_ns[index] < first_ns) ? m_suspect_sent_ns[index] : first_ns;
+    }
+    // A reordering overtakes only what left within the delay it shed, less than a round trip; a path that stopped
+    // carrying large packets loses them for longer than that.
+    if (m_suspect_count < kQuicPmtuBlackHoleDetections || sent_ns - first_ns < rtt_ns)
     {
         return false;
     }

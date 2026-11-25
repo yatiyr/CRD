@@ -185,9 +185,10 @@ public:
     void on_ack_begin() noexcept { m_delivery.on_ack_begin(); }
     [[nodiscard]] QuicPathSignals on_ack_end(QuicSpace space, const QuicAck& ack, const QuicAckOutcome& outcome,
                                              const QuicRtt& rtt, u64 in_flight, u64 now_ns) noexcept;
-    // A loss detection of this path (an ACK frame's or a timeout's) declared `lost`: persistent congestion reaches the
-    // controller, then black hole detection runs and the size found reaches the controller.
-    void end_detection(const QuicLoss& lost, u64 now_ns) noexcept;
+    // A loss detection of this path (an ACK frame's or a timeout's) declared `lost`, with the path's estimate:
+    // persistent congestion reaches the controller, then black hole detection runs and the size found reaches the
+    // controller.
+    void end_detection(const QuicLoss& lost, const QuicRtt& rtt, u64 now_ns) noexcept;
 
 private:
     // Storage of `bytes` for a controller: null on a refusal.

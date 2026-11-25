@@ -2,7 +2,8 @@
 // without discovery or above the floor, the ceiling probed first, a search to the exact byte for every link MTU, random
 // probe losses that fail no size, an IPv6 path's base probed first and its failure, the raise timer that waits for
 // data, a lowered ceiling and stale probes, a spurious loss that proves its size, and black hole detection against
-// congestion's look-alikes, and Packet Too Big hints used, ignored and shrinking the path. Then connections over paths
+// congestion's look-alikes and a reordered train's losses declared a packet at a time, and Packet Too Big hints used,
+// ignored and shrinking the path. Then connections over paths
 // of a fixed MTU: both ends finding it exactly while a transfer runs, the peer's max_udp_payload_size as the ceiling,
 // probe losses that reduce no window, a path whose MTU falls mid-transfer found again below it, loss and reordering on
 // the way, DATAGRAM sizes following the path, an IPv6 path's base, no probes without discovery, a reporting hop found
@@ -66,14 +67,27 @@ QuicPathMtu started(u32 base, u32 ceiling, bool discovery = true)
     return pmtu;
 }
 
-// A loss detection that lost `lost` (the oldest first) of `bytes`, and nothing smaller.
-bool detect(QuicPathMtu& pmtu, u64 oldest, u32 lost, u32 bytes = 1500U)
+// Packet `number` of the cases below left `number` milliseconds in.
+constexpr u64 at(u64 number)
+{
+    return number * kMs;
+}
+
+// A loss detection at `now_ns` on a path of `rtt_ns` round trips that lost `lost` packets of `bytes` (the oldest
+// first, a millisecond apart from `sent_ns`), and nothing smaller.
+bool detect_at(QuicPathMtu& pmtu, u64 sent_ns, u32 lost, u64 rtt_ns, u64 now_ns, u32 bytes = 1500U)
 {
     for (u32 index = 0U; index < lost; ++index)
     {
-        pmtu.on_lost(oldest + index, bytes);
+        pmtu.on_lost(sent_ns + index * kMs, bytes);
     }
-    return pmtu.end_detection(0U);
+    return pmtu.end_detection(now_ns, rtt_ns);
+}
+
+// The same for packets from `oldest` on a path of a millisecond's round trips, declared as the last one left.
+bool detect(QuicPathMtu& pmtu, u64 oldest, u32 lost, u32 bytes = 1500U)
+{
+    return detect_at(pmtu, at(oldest), lost, kMs, at(oldest + lost), bytes);
 }
 
 } // namespace
@@ -301,8 +315,9 @@ TEST_CASE("QUIC PMTU: black holes are found, and congestion's losses are not tak
     QuicPathMtu pmtu = started(1200U, 1500U);
     search(pmtu, 1500U);
     REQUIRE(pmtu.size() == 1500U);
-    pmtu.on_acked(9U, 1500U);
-    // Three detections losing only large packets sent after the newest large one acknowledged: a black hole.
+    pmtu.on_acked(at(9U), 1500U);
+    // Three detections losing only large packets sent after the newest large one acknowledged, and a round trip
+    // apart: a black hole.
     CHECK_FALSE(detect(pmtu, 10U, 4U));
     CHECK_FALSE(detect(pmtu, 14U, 2U));
     CHECK(detect(pmtu, 16U, 1U));
@@ -319,29 +334,29 @@ TEST_CASE("QUIC PMTU: black holes are found, and congestion's losses are not tak
     u64 next = 0U;
     for (u32 round = 0U; round < 10U; ++round)
     {
-        congested.on_lost(next, 1500U);
-        congested.on_lost(next + 1U, 1500U);
-        congested.on_acked(next + 2U, 1500U); // the same ACK frame acknowledges what followed
-        CHECK_FALSE(congested.end_detection(0U));
+        congested.on_lost(at(next), 1500U);
+        congested.on_lost(at(next + 1U), 1500U);
+        congested.on_acked(at(next + 2U), 1500U); // the same ACK frame acknowledges what followed
+        CHECK_FALSE(congested.end_detection(0U, kMs));
         next += 3U;
     }
     // Losses that a later large acknowledgement explains after the detection.
     CHECK_FALSE(detect(congested, next, 2U));
     CHECK_FALSE(detect(congested, next + 2U, 2U));
-    congested.on_acked(next + 4U, 1500U);
+    congested.on_acked(at(next + 4U), 1500U);
     CHECK_FALSE(detect(congested, next + 5U, 2U));
     CHECK_FALSE(detect(congested, next + 7U, 2U));
     // A detection that lost a small packet too, or packets older than the newest large one acknowledged, is none.
-    congested.on_lost(next + 9U, 1500U);
-    congested.on_lost(next + 10U, 1100U);
-    CHECK_FALSE(congested.end_detection(0U));
+    congested.on_lost(at(next + 9U), 1500U);
+    congested.on_lost(at(next + 10U), 1100U);
+    CHECK_FALSE(congested.end_detection(0U, kMs));
     CHECK_FALSE(detect(congested, next, 1U));
     CHECK_FALSE(detect(congested, next + 1U, 1U));
     CHECK(congested.size() == 1500U);
     CHECK(congested.counters().black_holes == 0U);
     // Small packets acknowledged clear nothing; detections that lost nothing count nothing.
-    congested.on_acked(next + 40U, 1200U);
-    CHECK_FALSE(congested.end_detection(0U));
+    congested.on_acked(at(next + 40U), 1200U);
+    CHECK_FALSE(congested.end_detection(0U, kMs));
     CHECK(detect(congested, next + 20U, 1U));
     CHECK(congested.counters().black_holes == 1U);
 
@@ -367,6 +382,52 @@ TEST_CASE("QUIC PMTU: black holes are found, and congestion's losses are not tak
     CHECK(v6.probe(0U, true) == kQuicIpv6BaseDatagram);
     search(v6, 1280U);
     CHECK(v6.size() == 1280U);
+}
+
+
+TEST_CASE("QUIC PMTU: a train a small packet overtook, declared lost a packet at a time, passes for no black hole",
+          "[net][net-path][quic-pmtu]")
+{
+    // A delay spike that ends mid-train (a LEO handover's) on a path of 50 ms round trips: ten large packets paced a
+    // millisecond apart from 10 ms keep its delay, and a 42-byte packet sent after it ends is acknowledged before
+    // them. RFC 9002's time threshold then declares the train lost a packet a detection: ten suspect detections, sent
+    // within the 9 ms the overtaking took, less than a round trip.
+    constexpr u64 rtt = 50U * kMs;
+    QuicPathMtu pmtu = started(1200U, 1500U);
+    search(pmtu, 1500U);
+    REQUIRE(pmtu.size() == 1500U);
+    pmtu.on_acked(at(9U), 1500U);
+    pmtu.on_acked(at(20U), 42U);
+    for (u32 index = 0U; index < 10U; ++index)
+    {
+        CHECK_FALSE(detect_at(pmtu, at(10U + index), 1U, rtt, (60U + index) * kMs));
+    }
+    CHECK(pmtu.size() == 1500U);
+    CHECK(pmtu.counters().black_holes == 0U);
+    // The train arrives after all (spurious losses), which clears the suspicion.
+    for (u64 number = 10U; number < 20U; ++number)
+    {
+        pmtu.on_acked(at(number), 1500U);
+    }
+    // Flights then lost whole: three suspect detections sent within a round trip are none yet, and the next one a
+    // round trip after the first is a black hole.
+    CHECK_FALSE(detect_at(pmtu, 75U * kMs, 4U, rtt, 110U * kMs));
+    CHECK_FALSE(detect_at(pmtu, 90U * kMs, 4U, rtt, 125U * kMs));
+    CHECK_FALSE(detect_at(pmtu, 124U * kMs, 4U, rtt, 165U * kMs));
+    CHECK(pmtu.size() == 1500U);
+    CHECK(detect_at(pmtu, 125U * kMs, 4U, rtt, 170U * kMs));
+    CHECK(pmtu.size() == kQuicPmtuFloor);
+    CHECK(pmtu.counters().black_holes == 1U);
+
+    // A spurious loss of the oldest suspect starts the span at the next one kept.
+    QuicPathMtu later = started(1200U, 1500U);
+    search(later, 1500U);
+    CHECK_FALSE(detect_at(later, 0U, 1U, rtt, 40U * kMs));
+    CHECK_FALSE(detect_at(later, 20U * kMs, 1U, rtt, 60U * kMs));
+    later.on_acked(0U, 1500U);
+    CHECK_FALSE(detect_at(later, 50U * kMs, 1U, rtt, 90U * kMs));
+    CHECK_FALSE(detect_at(later, 69U * kMs, 1U, rtt, 109U * kMs));
+    CHECK(detect_at(later, 70U * kMs, 1U, rtt, 110U * kMs));
 }
 
 TEST_CASE("QUIC PMTU: a Packet Too Big hint fails a probe at once and the next probe tries its limit",

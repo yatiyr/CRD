@@ -207,7 +207,7 @@ TEST_CASE("A path's loss reduces its own window and no other path's", "[path_con
     // Persistent congestion collapses one path's window to its floor.
     QuicLoss persistent;
     persistent.persistent_congestion = true;
-    two.b.end_detection(persistent, 200U * kMs);
+    two.b.end_detection(persistent, QuicRtt{}, 200U * kMs);
     CHECK(two.b.congestion().window() == 2U * kQuicPmtuFloor);
     CHECK(two.a.congestion().window() > 2U * kQuicPmtuFloor);
 

@@ -3885,7 +3885,7 @@ void QuicConnection::on_timeout(u64 now_ns) noexcept
     }
     m_event_ns = now_ns;
     const QuicTimeout timeout = m_recovery->on_timeout(now_ns, m_events);
-    control(timeout.path).end_detection(timeout.lost, now_ns);
+    control(timeout.path).end_detection(timeout.lost, m_recovery->rtt(timeout.path), now_ns);
     follow_datagram_size();
     if (timeout.kind != QuicTimeoutKind::Probe && timeout.kind != QuicTimeoutKind::AntiDeadlock)
     {
@@ -4580,7 +4580,7 @@ void QuicConnection::make_path_room(usize slot, u64 now_ns) noexcept
     }
     m_event_ns = now_ns;
     const QuicLoss lost = m_recovery->evict(application, slot, now_ns, m_events);
-    control(slot).end_detection(lost, now_ns);
+    control(slot).end_detection(lost, m_recovery->rtt(slot), now_ns);
     follow_datagram_size();
     ++m_counters.path_evictions;
 }

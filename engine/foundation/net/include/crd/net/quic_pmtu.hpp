@@ -16,12 +16,16 @@
 //   raising    a finished search (or Error) searches again kQuicPmtuRaiseNs after it ended (PMTU_RAISE_TIMER), and
 //              only while the connection has data to send, so probing never keeps an idle connection alive.
 //   black hole after a raise, a path that stops carrying large datagrams (a route change, a tunnel) loses them while
-//              small ones arrive. A loss detection whose lost packets all exceed 1200 bytes and were sent after the
+//              small ones arrive. A loss detection whose lost packets all exceed 1200 bytes and left after the
 //              newest acknowledged packet of that size is suspect; kQuicPmtuBlackHoleDetections suspect detections
-//              with no larger packet acknowledged after them fall back to 1200 bytes and search again below the size
-//              that failed. Congestion loses large packets too, but its acknowledgements of later large packets
-//              clear the suspicion; the connection sends 1200-byte datagrams while a probe timeout is pending, so a
-//              path that carries nothing large still gets its acknowledgements through.
+//              with no larger packet acknowledged that left after them, whose lost packets left at least a round
+//              trip apart, fall back to 1200 bytes and search again below the size that failed. Congestion loses large
+//              packets too, but its acknowledgements of later large packets clear the suspicion. A reordering lets a
+//              small packet overtake large ones (a delay spike's end, a LEO handover's), and RFC 9002's time
+//              threshold may declare them lost a detection each: those left within the delay the path shed, less
+//              than the round trip, so the span keeps them from passing for a black hole. The connection sends
+//              1200-byte datagrams while a probe timeout is pending, so a path that carries nothing large still gets
+//              its acknowledgements through.
 //   hints      an ICMP Packet Too Big message (RFC 8899 section 4.6) only lowers: once the connection matched its quote
 //              to a packet it sent (section 4.6.1), a probe above the hop's limit fails at once and the next probe
 //              tries the limit itself; a datagram of the size in use above it means the path shrank, and the size
@@ -87,11 +91,12 @@ public:
     // A probe of `bytes` was acknowledged (spuriously lost ones included), or declared lost.
     void on_probe_acked(u32 bytes, u64 now_ns) noexcept;
     void on_probe_lost(u32 bytes, u64 now_ns) noexcept;
-    // A packet that was no probe, numbered `number` in the Application space, was acknowledged or declared lost.
-    void on_acked(u64 number, u32 bytes) noexcept;
-    void on_lost(u64 number, u32 bytes) noexcept;
-    // A loss detection ended, after its ACK frame's acknowledgements: true when it found a black hole (size() fell).
-    bool end_detection(u64 now_ns) noexcept;
+    // A packet of the Application space that was no probe, sent at `sent_ns`, was acknowledged or declared lost.
+    void on_acked(u64 sent_ns, u32 bytes) noexcept;
+    void on_lost(u64 sent_ns, u32 bytes) noexcept;
+    // A loss detection ended, after its ACK frame's acknowledgements, on a path whose round trip is `rtt_ns`
+    // (RFC 9002's max(smoothed_rtt, latest_rtt)): true when it found a black hole (size() fell).
+    bool end_detection(u64 now_ns, u64 rtt_ns) noexcept;
     // A Packet Too Big message, matched to a sent datagram of `quoted` bytes, for a hop carrying `limit` bytes of UDP
     // payload, as the hints note says: true when it was used.
     bool on_too_big(u32 quoted, u32 limit, u64 now_ns) noexcept;
@@ -102,7 +107,10 @@ private:
     void search(u64 now_ns) noexcept; // Searching from m_low, or SearchComplete when nothing is left between
     void complete(u64 now_ns) noexcept;
 
+    // The search; the flags and counts first, so the layout keeps no padding.
     QuicPmtuState m_state = QuicPmtuState::Disabled;
+    bool m_optimistic = false;   // the next probe of the search is its ceiling
+    bool m_burst_small = false;  // black hole detection: this detection lost a packet of 1200 bytes or less
     u32 m_size = kQuicPmtuFloor;
     u32 m_base = kQuicPmtuFloor;
     u32 m_ceiling = kQuicPmtuFloor;
@@ -111,15 +119,14 @@ private:
     u32 m_trying = 0U;           // the size probed (0: the next probe picks one)
     u32 m_failures = 0U;         // consecutive losses of probes of m_trying
     u32 m_flight = 0U;           // the size of the probe in flight, 0 for none
-    bool m_optimistic = false;   // the next probe of the search is its ceiling
+    u32 m_suspect_count = 0U;    // black hole detection: m_suspect_sent_ns held
     u64 m_raise_ns = kNeverNs;
 
-    // Black hole detection.
-    u64 m_large_acked = 0U; // the newest acknowledged packet over 1200 bytes, plus one (0: none)
-    u64 m_suspects[kQuicPmtuBlackHoleDetections] = {}; // each suspect detection's oldest lost packet
-    u32 m_suspect_count = 0U;
-    u64 m_burst_oldest = kNeverNs; // this detection's oldest large lost packet
-    bool m_burst_small = false;    // this detection lost a packet of 1200 bytes or less
+    // Black hole detection, by when each packet left: the newest acknowledged packet over 1200 bytes, plus one (0:
+    // none); each suspect detection's oldest lost packet; this detection's oldest large lost packet.
+    u64 m_large_after_ns = 0U;
+    u64 m_suspect_sent_ns[kQuicPmtuBlackHoleDetections] = {};
+    u64 m_burst_sent_ns = kNeverNs;
     QuicPmtuCounters m_counters;
 };
 

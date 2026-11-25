@@ -838,7 +838,7 @@ usize op_timeout(World& w)
     }
     CRD_FUZZ_REQUIRE(out.kind != QuicTimeoutKind::None);
     CRD_FUZZ_REQUIRE(out.path < kQuicMaxPaths && w.sending(out.space, out.path));
-    w.controls[out.path].end_detection(out.lost, w.now);
+    w.controls[out.path].end_detection(out.lost, w.recovery.rtt(out.path), w.now);
     const usize owner = owner_of(out.space, out.path);
     if (out.kind == QuicTimeoutKind::Loss)
     {

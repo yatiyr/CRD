@@ -3,9 +3,9 @@
 //
 // Input: operations of two bytes, an operation (its low three bits the kind, the rest a parameter) and a parameter,
 // on one search: probes asked for (busy or not) and sent or not, probes acknowledged or lost (the ones in flight, or
-// any size: stale, spurious and forged settlements), other packets of any size and number acknowledged or lost, loss
-// detections ended, ceilings lowered, Packet Too Big hints of any limit, time and new paths of any base, ceiling and
-// discovery.
+// any size: stale, spurious and forged settlements), other packets of any size and send time acknowledged or lost,
+// loss detections ended on a round trip of up to 31 ms, ceilings lowered, Packet Too Big hints of any limit, time and
+// new paths of any base, ceiling and discovery.
 //
 // Oracles. The size stays within the floor and the ceiling, and the ceiling never rises. Only an acknowledgement
 // raises the size, and only to the size it proves; only a black hole, a hint or a lower ceiling lowers it, the first
@@ -30,7 +30,6 @@ struct World
     u32 ceiling = kQuicPmtuFloor;
     u32 base = kQuicPmtuFloor; // the search's base as start() and limit() leave it
     u32 flight = 0U;           // the probe sent and not settled, 0 for none
-    u64 number = 0U;           // the next packet number
     u64 now = 0U;
     QuicPmtuCounters counters;
 };
@@ -101,24 +100,25 @@ void run(World& w, u8 op, u8 p)
         case 3U:
         case 4U:
         {
-            // A packet sent `q` numbers back (or the next), of any size.
-            const u64 number = (w.number > q) ? w.number - q : w.number;
-            w.number += (q == 0U) ? 1U : 0U;
+            // A packet sent `q` milliseconds back (or now), of any size.
+            const u64 back_ns = u64{q} * 1000000U;
+            const u64 sent_ns = (w.now > back_ns) ? w.now - back_ns : 0U;
             const u32 bytes = ((p & 1U) != 0U) ? kQuicPmtuFloor - (p >> 1U) : size_of(p);
             if ((op & 7U) == 3U)
             {
-                w.pmtu.on_acked(number, bytes);
+                w.pmtu.on_acked(sent_ns, bytes);
             }
             else
             {
-                w.pmtu.on_lost(number, bytes);
+                w.pmtu.on_lost(sent_ns, bytes);
             }
             CRD_FUZZ_REQUIRE(w.pmtu.size() == before && w.pmtu.state() == state);
             break;
         }
         case 5U:
         {
-            const bool black = w.pmtu.end_detection(w.now);
+            // On a round trip of up to 31 ms.
+            const bool black = w.pmtu.end_detection(w.now, u64{q} * 1000000U);
             if (black)
             {
                 CRD_FUZZ_REQUIRE(w.pmtu.size() == kQuicPmtuFloor && before > kQuicPmtuFloor);
