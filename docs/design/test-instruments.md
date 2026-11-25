@@ -307,10 +307,11 @@ uploaded, and a leg with an event fails. The arms separate the causes: a hosted 
 control is a jobs defect, an event in the plain control anywhere is that machine's, and clean legs where this host
 faults put the fault on this host.
 
-Two provider legs (NET.2, [session](../sessions/2026-11-25-crypto-threaded-signing-control.md)) ask the same of the
+Six provider legs (NET.2, [session](../sessions/2026-11-25-crypto-threaded-signing-control.md)) ask the same of the
 nonreproduced register's threaded ML-DSA signing entry: on hosted win-asan a thread's first signing with a shared
-ML-DSA-65 key was refused after 10 to 19 s, a second signing at once succeeding. Each leg (`windows-2025`, six of them,
-since the case has failed only on Intel Xeon runners) configures `win-asan`, builds `crd-crypto-tests` and the [programs
+ML-DSA-65 key was refused after 10 to 22 s, a second signing at once succeeding. Each leg (`windows-2025`; the case has
+failed only on Intel Xeon runners, and each job draws its CPU) reads its CPU first and stops at once on one that is not
+Intel's unless `provider_cpu` is `any`; otherwise it configures `win-asan`, builds `crd-crypto-tests` and the [programs
 that split the case](../../tests/foundation/crypto/control): `crd-mldsa-threads-control`, which makes the case's
 provider calls in its order through the same tree's AWS-LC alone (plain, with a start gate that releases the four first
 signings together, with the case's storage, and both), and `crd-mldsa-threads-cerid`, the case through crd-crypto's

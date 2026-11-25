@@ -629,6 +629,7 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `host-check/udp-ring` | Build the net tests | `experiment-udp-ring` | open (CI-4): not yet carried |
 | `host-check/udp-ring` | Limits and ring refusals | `experiment-udp-ring` | open (CI-4): not yet carried |
 | `host-check/udp-ring` | Preserve results | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Runner CPU | `experiment-provider-threads` | open (CI-4): not yet carried |
 | `host-check/provider-threads` | Checkout | `experiment-provider-threads` | open (CI-4): not yet carried |
 | `host-check/provider-threads` | Setup Python 3.12 | `experiment-provider-threads` | open (CI-4): not yet carried |
 | `host-check/provider-threads` | Install pinned Ninja 1.11.1 | `experiment-provider-threads` | open (CI-4): not yet carried |

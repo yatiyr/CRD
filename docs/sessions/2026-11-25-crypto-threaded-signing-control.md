@@ -14,8 +14,8 @@ thread's first signing was refused after 11,266 ms, and a second signing at once
 ## What landed
 
 - `tests/foundation/crypto/control/` holds three EXCLUDE_FROM_ALL programs, none of them a CTest:
-  - `crd-mldsa-threads-control` links only `crypto`. It runs the case's provider calls in the case's order. Its modes are
-    `gate` (the four first signings released together) and `storage` (the case's stack digest context and heap
+  - `crd-mldsa-threads-control` links only `crypto`. It runs the case's provider calls in the case's order. Its modes
+    are `gate` (the four first signings released together) and `storage` (the case's stack digest context and heap
     signature).
   - `crd-mldsa-threads-cerid` runs the case through `SigningKey` with no Catch2. Its modes are `gate`, `warm` (one
     signing on the main thread first) and `std-buffer` (signatures outside the engine's allocator).
@@ -23,7 +23,8 @@ thread's first signing was refused after 11,266 ms, and a second signing at once
   - crd-crypto installs nothing into AWS-LC: a grep finds no allocator, RNG or thread hook and no init call.
 - `scripts/provider-host-check.py` runs every arm in fresh processes. The case runs directly and through CTest. An
   optional contended phase is available. It has a unit test.
-- `host-check.yml`: experiment `provider-threads`, six `windows-2025` win-asan legs.
+- `host-check.yml`: experiment `provider-threads`, six `windows-2025` win-asan legs. Each leg reads its CPU first and
+  stops at once on one that is not Intel's, unless `provider_cpu` is `any`.
 
 ## Evidence
 
@@ -37,13 +38,17 @@ thread's first signing was refused after 11,266 ms, and a second signing at once
   included (its slowest run 1.03 s).
 - **Host check 45531196275** (six legs): every leg drew AMD EPYC (7763, 9V74 four times, 9V45), and every arm was
   clean.
-- The fault follows Intel Xeon runners, not the case alone. So the step (2) TP entry is off. The register entry no
-  longer says the fault comes from below Cerid.
+- The fault follows Intel Xeon runners. The lane agrees: the case passed on the AMD EPYC win-asan shards of
+  45466383581, 45358207939 and 45496952342 (7763, 9V74) and failed on that run's Xeon 6973P-C shard.
+- The plain control does not reproduce it. The gate and storage arms have not run on an Intel machine, so no TP entry
+  is written and the register entry no longer says the fault comes from below Cerid. Nothing is gated, so win-asan
+  stays red whenever its shard draws an Intel Xeon.
 - Locally (i9-14900K, MSVC 19.51, also under SDE `-gnr`) every arm is clean. That proves only the tool.
 
 ## Next
 
-Redispatch `provider-threads` until a leg draws an Intel Xeon. On that leg the arms decide:
+Redispatch `provider-threads` until a leg draws an Intel Xeon (a leg on AMD now stops after about a minute). On that
+leg the arms decide:
 - a control arm fails: a TP entry with an intermittent-gate design;
 - only the `cerid` arms fail: a crd-crypto fix, with teeth;
 - only the case fails: the test program is the cause.

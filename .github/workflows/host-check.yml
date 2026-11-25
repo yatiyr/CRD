@@ -43,6 +43,11 @@ on:
         description: 'provider-threads processes at once after each round (0: no contended phase)'
         type: number
         default: 0
+      provider_cpu:
+        description: 'provider-threads runners that run the rounds (intel: Intel CPUs only)'
+        type: choice
+        options: [intel, any]
+        default: intel
 
 permissions:
   contents: read
@@ -647,7 +652,8 @@ jobs:
     # Cerid-free control (the same provider calls through the tree's AWS-LC alone) and the case through crd-crypto
     # without the test program (tests/foundation/crypto/control), and runs them in fresh processes
     # (scripts/provider-host-check.py). The case has failed only on Intel Xeon runners (8573C, 6973P-C) and passed on AMD
-    # EPYC ones (7763, 9V45), and the runner's CPU is drawn per job, so six legs make an Intel machine near certain.
+    # EPYC ones (7763, 9V45, 9V74), and the runner's CPU is drawn per job: six legs, each of which reads its CPU first
+    # and, unless provider_cpu is any, stops at once on a CPU that is not Intel's.
     name: Host check (provider threads, leg ${{ matrix.leg }})
     if: inputs.experiment == 'all' || inputs.experiment == 'provider-threads'
     runs-on: windows-2025
@@ -661,25 +667,42 @@ jobs:
         leg: [1, 2, 3, 4, 5, 6]
 
     steps:
+      - name: Runner CPU
+        id: cpu
+        shell: pwsh
+        env:
+          WANT: ${{ inputs.provider_cpu }}
+        run: |
+          $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()
+          $run = ($env:WANT -eq 'any') -or ($cpu -match 'Intel')
+          "run=$($run.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $verdict = if ($run) { 'runs' } else { 'skipped: the refusal has needed an Intel CPU' }
+          "### Provider threads on $cpu`: $verdict" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
       - name: Checkout
+        if: steps.cpu.outputs.run == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Python 3.12
+        if: steps.cpu.outputs.run == 'true'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
       - name: Install pinned Ninja 1.11.1
+        if: steps.cpu.outputs.run == 'true'
         shell: bash
         run: python scripts/install-ninja.py --destination "$RUNNER_TEMP/ninja" --github-path "$GITHUB_PATH"
 
       - name: Setup MSVC
+        if: steps.cpu.outputs.run == 'true'
         shell: pwsh
         run: python scripts/msvc-dev-env.py --github-env "$env:GITHUB_ENV"
 
       - name: Cache CPM downloads
+        if: steps.cpu.outputs.run == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.CPM_SOURCE_CACHE }}
@@ -689,6 +712,7 @@ jobs:
             cpm-${{ runner.os }}-
 
       - name: Cache Vulkan SDK
+        if: steps.cpu.outputs.run == 'true'
         id: vulkan-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -696,22 +720,26 @@ jobs:
           key: vulkan-sdk-1.4.341.1-windows
 
       - name: Install Vulkan SDK
-        if: steps.vulkan-cache.outputs.cache-hit != 'true'
+        if: steps.cpu.outputs.run == 'true' && steps.vulkan-cache.outputs.cache-hit != 'true'
         run: python scripts/install-vulkan-sdk.py --download-dir "${{ runner.temp }}"
 
       - name: Set Vulkan environment
+        if: steps.cpu.outputs.run == 'true'
         shell: pwsh
         run: |
           "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure
+        if: steps.cpu.outputs.run == 'true'
         run: cmake --preset win-asan
 
       - name: Build the case and the programs that split it
+        if: steps.cpu.outputs.run == 'true'
         run: cmake --build --preset win-asan --target crd-crypto-tests crd-mldsa-threads-control crd-mldsa-threads-cerid
 
       - name: Rounds
+        if: steps.cpu.outputs.run == 'true'
         shell: pwsh
         env:
           ROUNDS: ${{ inputs.provider_rounds }}
@@ -726,7 +754,7 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Collect logs
-        if: always()
+        if: always() && steps.cpu.outputs.run == 'true'
         shell: pwsh
         run: |
           $evidence = "$env:RUNNER_TEMP\host-check\evidence"
@@ -736,7 +764,7 @@ jobs:
           }
 
       - name: Preserve logs
-        if: always()
+        if: always() && steps.cpu.outputs.run == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: host-check-provider-threads-${{ matrix.leg }}
