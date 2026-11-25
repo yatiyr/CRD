@@ -2875,12 +2875,12 @@ TEST_CASE("QUIC connection: a skipped packet number and a greased QUIC bit are d
     run.handshake();
     QuicFrame ping;
     ping.kind = QuicFrameKind::Ping;
-    constexpr u64 kPackets = 3072U; // about 48 skips
-    for (usize round = 0U; round < 3U * kPackets && run.raw.largest[2] < kPackets; ++round)
+    constexpr u64 wanted_packets = 3072U; // about 48 skips
+    for (usize round = 0U; round < 3U * wanted_packets && run.raw.largest[2] < wanted_packets; ++round)
     {
         run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(ping, out); });
     }
-    REQUIRE(run.raw.largest[2] >= kPackets);
+    REQUIRE(run.raw.largest[2] >= wanted_packets);
     usize packets = 0U;
     usize cleared = 0U;
     usize skips = 0U;
