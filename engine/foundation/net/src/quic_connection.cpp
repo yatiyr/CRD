@@ -45,6 +45,7 @@ constexpr usize kMinUsefulPacket = 64U; // a server with less credit than this w
 constexpr usize kPullChunk = 512U;
 constexpr usize kKeyedHelloPrefix = 2U; // a keyed connection's parameters follow their two-byte length
 constexpr u64 kSkipMask = 63U;   // one 1-RTT packet number in 64 is skipped (section 21.4)
+constexpr u32 kSkipShift = 1U;   // a packet's draw: bit 0 greases its QUIC bit, the six above it choose a skip
 constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries a PING
 constexpr u8 kRefreshPackets = 2U;           // the PINGs, each in a packet of its own, that measure an idle path's RTT
 // The PATH_ACKs move to a shorter path only once its smoothed RTT is this fraction (a right shift) below the current
@@ -3173,7 +3174,9 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     Numbering& numbers = m_numbers[number_space(space, slot)];
     u64 number = numbers.next;
     bool skip = false;
-    if (space == QuicSpace::Application && !closing && (entropy() & kSkipMask) == 0U && number < kQuicMaxVarint)
+    const u64 draw = entropy(); // one PRF output a packet, its bits disjoint (kSkipShift)
+    if (space == QuicSpace::Application && !closing && ((draw >> kSkipShift) & kSkipMask) == 0U &&
+        number < kQuicMaxVarint)
     {
         skip = true;
         ++number;
@@ -3199,7 +3202,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     const u64 largest = m_recovery->largest_acked(space, slot);
     spec.acknowledged = largest != kQuicNoPacket;
     spec.largest_acked = spec.acknowledged ? largest : 0U;
-    spec.clear_quic_bit = quic_grease_bit_clear(m_peer_greases, entropy());
+    spec.clear_quic_bit = quic_grease_bit_clear(m_peer_greases, draw);
     QuicPacketWriter writer;
     if (!writer.begin(spec, room))
     {
