@@ -629,6 +629,19 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `host-check/udp-ring` | Build the net tests | `experiment-udp-ring` | open (CI-4): not yet carried |
 | `host-check/udp-ring` | Limits and ring refusals | `experiment-udp-ring` | open (CI-4): not yet carried |
 | `host-check/udp-ring` | Preserve results | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Checkout | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Setup Python 3.12 | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Install pinned Ninja 1.11.1 | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Setup MSVC | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Cache CPM downloads | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Cache Vulkan SDK | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Install Vulkan SDK | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Set Vulkan environment | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Configure | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Build the case and the programs that split it | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Rounds | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Collect logs | `experiment-provider-threads` | open (CI-4): not yet carried |
+| `host-check/provider-threads` | Preserve logs | `experiment-provider-threads` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer` | Checkout | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer` | Setup Python 3.12 | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer` | Installer arm | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
