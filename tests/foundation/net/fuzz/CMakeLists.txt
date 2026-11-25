@@ -62,10 +62,11 @@ crd_fuzz_target(crd-fuzz-net-quic-cids
 
 # QUIC's path MTU search (NET-PATH).
 #   crd-fuzz-net-quic-pmtu   any probes asked and sent, probe settlements in flight, stale, spurious or forged, other
-#                            packets of any size acknowledged or lost, detections, lowered ceilings, time and new paths
-#                            on one search: the size within the floor and the ceiling, raised only by an
+#                            packets of any size sent, acknowledged or lost, detections, lowered ceilings, time and
+#                            new paths on one search: the size within the floor and the ceiling, raised only by an
 #                            acknowledgement to what it proves, lowered only by a black hole (to the floor) or a
-#                            ceiling, and probes above the size, one at a time, none without discovery.
+#                            ceiling, probes above the size, one at a time, none without discovery, and canaries only
+#                            above the floor after three larger packets.
 crd_fuzz_target(crd-fuzz-net-quic-pmtu
     SOURCES fuzz_quic_pmtu.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-pmtu")
 

@@ -33,6 +33,11 @@ using namespace crd::net;
 using namespace crd::net::testing;
 
 constexpr u64 kSecond = 1000U * kMs;
+// How soon a fall is found on the connection cases' 40 ms round trips: mid-transfer, the first suspect detection a
+// round trip in and a canary's acknowledgement a round trip later (192 to 240 ms without canaries); before a flight,
+// a probe timeout first (464 ms without).
+constexpr u64 kFallFoundNs = 110U * kMs;
+constexpr u64 kIdleFallFoundNs = 250U * kMs;
 
 // Runs the search against a path that carries `carries` bytes: each probe is acknowledged or lost by its size.
 // Returns the probes sent.
@@ -430,6 +435,82 @@ TEST_CASE("QUIC PMTU: a train a small packet overtook, declared lost a packet at
     CHECK(detect_at(later, 70U * kMs, 1U, rtt, 110U * kMs));
 }
 
+TEST_CASE("QUIC PMTU: only an acknowledgement as large as a suspicion's losses clears it", "[net][net-path][quic-pmtu]")
+{
+    constexpr u64 rtt = 40U * kMs;
+    // A path fallen to 1300 bytes still carries 1250: acknowledgements of those after 1500-byte losses prove nothing,
+    // neither for a suspicion held nor for the losses of a later detection.
+    QuicPathMtu fallen = started(1200U, 1500U);
+    search(fallen, 1500U);
+    fallen.on_acked(at(9U), 1500U);
+    CHECK_FALSE(detect_at(fallen, at(10U), 2U, rtt, at(55U)));
+    fallen.on_acked(at(12U), 1250U);
+    fallen.on_acked(at(30U), 1250U);
+    CHECK_FALSE(detect_at(fallen, at(25U), 2U, rtt, at(71U)));
+    CHECK(detect_at(fallen, at(50U), 1U, rtt, at(96U)));
+    CHECK(fallen.counters().black_holes == 1U);
+
+    // Losses of 1300 bytes, cleared by a packet as large: the two suspicions left are no black hole. One of 1250 then
+    // clears none, and the next detection a round trip after the oldest kept is one.
+    QuicPathMtu mixed = started(1200U, 1500U);
+    search(mixed, 1500U);
+    CHECK_FALSE(detect_at(mixed, at(0U), 1U, rtt, at(45U), 1300U));
+    mixed.on_acked(at(1U), 1300U);
+    CHECK_FALSE(detect_at(mixed, at(30U), 1U, rtt, at(75U), 1300U));
+    CHECK_FALSE(detect_at(mixed, at(50U), 1U, rtt, at(95U), 1300U));
+    mixed.on_acked(at(51U), 1250U);
+    CHECK(mixed.size() == 1500U);
+    CHECK(detect_at(mixed, at(75U), 1U, rtt, at(120U), 1300U));
+}
+
+TEST_CASE("QUIC PMTU: a held suspicion asks for a datagram of the floor after each three larger ones",
+          "[net][net-path][quic-pmtu]")
+{
+    constexpr u64 rtt = 40U * kMs;
+    QuicPathMtu pmtu = started(1200U, 1500U);
+    search(pmtu, 1500U);
+    for (u32 index = 0U; index < 10U; ++index)
+    {
+        pmtu.on_sent(1500U);
+        CHECK_FALSE(pmtu.canary()); // nothing suspected: every datagram keeps the size in use
+    }
+    CHECK_FALSE(detect_at(pmtu, at(10U), 2U, rtt, at(55U)));
+    CHECK(pmtu.canary()); // three larger ones left already
+    pmtu.on_sent(1200U);
+    CHECK_FALSE(pmtu.canary());
+    for (u32 index = 0U; index < kQuicPmtuCanaryAfter; ++index)
+    {
+        CHECK_FALSE(pmtu.canary());
+        pmtu.on_sent(1400U);
+    }
+    CHECK(pmtu.canary());
+    pmtu.on_sent(900U); // any datagram of the floor or less is one
+    CHECK_FALSE(pmtu.canary());
+    // An acknowledgement that clears the suspicion ends the canaries.
+    pmtu.on_sent(1500U);
+    pmtu.on_sent(1500U);
+    pmtu.on_sent(1500U);
+    REQUIRE(pmtu.canary());
+    pmtu.on_acked(at(20U), 1500U);
+    CHECK_FALSE(pmtu.canary());
+
+    // So do a black hole, and a ceiling under the size in use.
+    CHECK_FALSE(detect_at(pmtu, at(30U), 1U, rtt, at(75U)));
+    CHECK_FALSE(detect_at(pmtu, at(50U), 1U, rtt, at(95U)));
+    REQUIRE(pmtu.canary());
+    CHECK(detect_at(pmtu, at(70U), 1U, rtt, at(115U)));
+    CHECK_FALSE(pmtu.canary());
+    QuicPathMtu lowered = started(1200U, 1500U);
+    search(lowered, 1500U);
+    lowered.on_sent(1500U);
+    lowered.on_sent(1500U);
+    lowered.on_sent(1500U);
+    CHECK_FALSE(detect_at(lowered, at(10U), 1U, rtt, at(55U)));
+    REQUIRE(lowered.canary());
+    lowered.limit(1400U);
+    CHECK_FALSE(lowered.canary());
+}
+
 TEST_CASE("QUIC PMTU: a Packet Too Big hint fails a probe at once and the next probe tries its limit",
           "[net][net-path][quic-pmtu]")
 {
@@ -701,6 +782,14 @@ TEST_CASE("QUIC PMTU: a path whose MTU falls mid-transfer is a black hole found 
         {
             path.mtu = 1380U;
         }
+        const u64 fell = pair.net->now;
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                static_cast<void>(bulk.step());
+                return pair.client.path_mtu().counters().black_holes != 0U;
+            }));
+        CHECK(pair.net->now - fell <= kFallFoundNs);
         REQUIRE(pair.net->run_until([&] { return bulk.step() && pair.searched(); }, 600U * kSecond));
         CHECK(pair.client.path_mtu().counters().black_holes == 1U);
         CHECK(pair.client.path_mtu().size() == 1380U);
@@ -744,6 +833,14 @@ TEST_CASE("QUIC PMTU: a path that falls toward one end of a two-way transfer is 
             return down.read >= midway;
         }));
     pair.net->path[1].mtu = 1300U; // toward the client alone
+    const u64 fell = pair.net->now;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(both());
+            return pair.server.path_mtu().counters().black_holes != 0U;
+        }));
+    CHECK(pair.net->now - fell <= kFallFoundNs);
     REQUIRE(pair.net->run_until([&] { return both() && pair.searched(); }, 600U * kSecond));
     CHECK(pair.server.path_mtu().counters().black_holes == 1U);
     CHECK(pair.server.path_mtu().size() == 1300U);
@@ -807,6 +904,14 @@ TEST_CASE("QUIC PMTU: DATAGRAM frames grow with the path and a fall drops the qu
                 QuicDatagramError::None);
     }
     Bulk bulk{pair.client, pair.server, 1U << 20U};
+    const u64 fell = pair.net->now;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(bulk.step());
+            return pair.client.path_mtu().counters().black_holes != 0U;
+        }));
+    CHECK(pair.net->now - fell <= kIdleFallFoundNs);
     REQUIRE(pair.net->run_until([&] { return bulk.step() && pair.searched(); }, 600U * kSecond));
     CHECK(pair.client.path_mtu().counters().black_holes == 1U);
     CHECK(pair.client.path_mtu().size() == 1300U);

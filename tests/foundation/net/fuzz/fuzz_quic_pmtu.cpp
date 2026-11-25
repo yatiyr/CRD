@@ -3,7 +3,8 @@
 //
 // Input: operations of two bytes, an operation (its low three bits the kind, the rest a parameter) and a parameter,
 // on one search: probes asked for (busy or not) and sent or not, probes acknowledged or lost (the ones in flight, or
-// any size: stale, spurious and forged settlements), other packets of any size and send time acknowledged or lost,
+// any size: stale, spurious and forged settlements), other packets of any size sent, or of any send time acknowledged
+// or lost,
 // loss detections ended on a round trip of up to 31 ms, ceilings lowered, Packet Too Big hints of any limit, time and
 // new paths of any base, ceiling and discovery.
 //
@@ -12,7 +13,8 @@
 // two to the floor. A probe names a size above the size and within the ceiling, never while one is in flight, and none
 // without discovery; nothing is probed or found in Disabled. Counters only rise. A Packet Too Big hint is used exactly
 // when discovery runs and its limit lies between the base and the datagram quoted; it never raises the size, and lowers
-// it only to the floor and only for a limit under the size in use.
+// it only to the floor and only for a limit under the size in use. A canary is asked for only while the size is
+// above the floor and the search raised it, and never after a datagram of the floor until three larger ones left.
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_pmtu.hpp>
 
@@ -31,6 +33,7 @@ struct World
     u32 base = kQuicPmtuFloor; // the search's base as start() and limit() leave it
     u32 flight = 0U;           // the probe sent and not settled, 0 for none
     u64 now = 0U;
+    u32 large_run = 0U; // the larger packets sent since the last of the floor or less
     QuicPmtuCounters counters;
 };
 
@@ -44,6 +47,11 @@ void check(const World& w)
     const QuicPathMtu& pmtu = w.pmtu;
     CRD_FUZZ_REQUIRE(pmtu.size() >= kQuicPmtuFloor && pmtu.size() <= pmtu.ceiling());
     CRD_FUZZ_REQUIRE(pmtu.ceiling() <= w.ceiling);
+    if (pmtu.canary())
+    {
+        CRD_FUZZ_REQUIRE(pmtu.size() > kQuicPmtuFloor && w.large_run >= kQuicPmtuCanaryAfter);
+        CRD_FUZZ_REQUIRE(pmtu.state() == QuicPmtuState::Searching || pmtu.state() == QuicPmtuState::SearchComplete);
+    }
     const QuicPmtuCounters& c = pmtu.counters();
     CRD_FUZZ_REQUIRE(c.probes_sent >= w.counters.probes_sent && c.probes_acked >= w.counters.probes_acked &&
                      c.probes_lost >= w.counters.probes_lost && c.black_holes >= w.counters.black_holes &&
@@ -76,6 +84,15 @@ void run(World& w, u8 op, u8 p)
     {
         case 0U:
         {
+            if ((q & 4U) != 0U)
+            {
+                // An ack-eliciting packet of any size left.
+                const u32 bytes = ((p & 1U) != 0U) ? kQuicPmtuFloor - (p >> 1U) : size_of(p);
+                w.pmtu.on_sent(bytes);
+                CRD_FUZZ_REQUIRE(w.pmtu.size() == before && w.pmtu.state() == state);
+                w.large_run = (bytes <= kQuicPmtuFloor) ? 0U : w.large_run + 1U;
+                break;
+            }
             const u32 probe = w.pmtu.probe(w.now, (q & 1U) != 0U);
             CRD_FUZZ_REQUIRE(w.pmtu.size() == before);
             if (probe == 0U)
@@ -249,6 +266,27 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     put(hole, 0x10U, 0x00U);
     put(hole, 0x0CU, 0x01U); // an older packet of 1200 lost
     sink.add("black-hole", hole, at);
+    // Canaries: a suspicion held while large packets and one of the floor leave, a smaller acknowledgement that clears
+    // nothing, then a black hole.
+    u8 canary[2U * 15U];
+    at = 0U;
+    put(canary, 0xA7U, 0x08U); // start: base 1200, ceiling 1496, discovery
+    put(canary, 0x10U, 0x00U);
+    put(canary, 0x09U, 0x00U); // the ceiling
+    put(canary, 0x04U, 0x08U); // a 1496-byte packet lost
+    put(canary, 0x05U, 0x00U); // a suspect detection
+    for (u8 i = 0U; i < 3U; ++i)
+    {
+        put(canary, 0x20U, 0x08U); // a 1496-byte packet sent
+    }
+    put(canary, 0x20U, 0x01U); // the canary, 1200 bytes
+    put(canary, 0x03U, 0x02U); // a 1274-byte packet acknowledged: it clears nothing
+    put(canary, 0x07U, 0x28U); // 40 ms on
+    put(canary, 0x04U, 0x08U);
+    put(canary, 0x05U, 0x00U);
+    put(canary, 0x04U, 0x08U);
+    put(canary, 0x2DU, 0x00U); // a detection on a 5 ms round trip: the black hole
+    sink.add("canary", canary, at);
     // No discovery: nothing probes, nothing finds a black hole.
     u8 off[2U * 6U];
     at = 0U;

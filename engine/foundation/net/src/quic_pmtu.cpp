@@ -19,6 +19,11 @@ namespace
 {
     return (a > kNeverNs - b) ? kNeverNs : a + b;
 }
+
+[[nodiscard]] constexpr u16 size16(u32 bytes) noexcept
+{
+    return static_cast<u16>(min_u32(bytes, 0xFFFFU));
+}
 } // namespace
 
 void QuicPathMtu::start(u32 base, u32 ceiling, bool discovery) noexcept
@@ -46,6 +51,8 @@ void QuicPathMtu::limit(u32 ceiling) noexcept
     }
     m_ceiling = bound;
     m_base = min_u32(m_base, bound);
+    // Suspicions of sizes the path no longer uses are moot.
+    m_suspect_count = (bound < m_size) ? u8{0U} : m_suspect_count;
     m_size = min_u32(m_size, bound);
     m_low = min_u32(m_low, bound);
     m_high = min_u32(m_high, bound);
@@ -120,7 +127,7 @@ void QuicPathMtu::on_probe_acked(u32 bytes, u64 now_ns) noexcept
 {
     ++m_counters.probes_acked;
     m_flight = (bytes == m_flight) ? 0U : m_flight;
-    m_failures = (bytes == m_trying) ? 0U : m_failures;
+    m_failures = (bytes == m_trying) ? u8{0U} : m_failures;
     if (m_state == QuicPmtuState::Disabled || bytes > m_ceiling)
     {
         return; // a probe sent before the ceiling fell proves nothing the connection may use
@@ -179,21 +186,34 @@ void QuicPathMtu::on_probe_lost(u32 bytes, u64 now_ns) noexcept
 
 void QuicPathMtu::on_acked(u64 sent_ns, u32 bytes) noexcept
 {
-    if (bytes <= kQuicPmtuFloor || sent_ns + 1U <= m_large_after_ns)
+    if (bytes <= kQuicPmtuFloor)
     {
         return;
     }
-    m_large_after_ns = sent_ns + 1U;
-    // A larger packet acknowledged that left after a suspect detection's losses: they were congestion, not the path.
+    if (sent_ns + 1U > m_large_after_ns)
+    {
+        m_large_after_ns = sent_ns + 1U;
+        m_large_after_bytes = size16(bytes);
+    }
+    // A packet as large as a suspect detection's smallest loss, acknowledged and sent after its losses: the path
+    // carries that size, so they were congestion.
     u32 kept = 0U;
     for (u32 index = 0U; index < m_suspect_count; ++index)
     {
-        if (m_suspect_sent_ns[index] >= m_large_after_ns)
+        if (m_suspect_sent_ns[index] > sent_ns || bytes < m_suspect_bytes[index])
         {
-            m_suspect_sent_ns[kept++] = m_suspect_sent_ns[index];
+            m_suspect_sent_ns[kept] = m_suspect_sent_ns[index];
+            m_suspect_bytes[kept] = m_suspect_bytes[index];
+            ++kept;
         }
     }
-    m_suspect_count = kept;
+    m_suspect_count = static_cast<u8>(kept);
+}
+
+void QuicPathMtu::on_sent(u32 bytes) noexcept
+{
+    const u32 run = (bytes <= kQuicPmtuFloor) ? 0U : min_u32(u32{m_large_run} + 1U, kQuicPmtuCanaryAfter);
+    m_large_run = static_cast<u8>(run);
 }
 
 void QuicPathMtu::on_lost(u64 sent_ns, u32 bytes) noexcept
@@ -204,22 +224,27 @@ void QuicPathMtu::on_lost(u64 sent_ns, u32 bytes) noexcept
         return;
     }
     m_burst_sent_ns = (sent_ns < m_burst_sent_ns) ? sent_ns : m_burst_sent_ns;
+    m_burst_bytes = (size16(bytes) < m_burst_bytes) ? size16(bytes) : m_burst_bytes;
 }
 
 bool QuicPathMtu::end_detection(u64 now_ns, u64 rtt_ns) noexcept
 {
     const u64 sent_ns = m_burst_sent_ns;
+    const u16 bytes = m_burst_bytes;
     const bool small = m_burst_small;
     m_burst_sent_ns = kNeverNs;
+    m_burst_bytes = 0xFFFFU;
     m_burst_small = false;
     const bool raised = m_state == QuicPmtuState::Searching || m_state == QuicPmtuState::SearchComplete;
-    if (sent_ns == kNeverNs || small || !raised || m_size == kQuicPmtuFloor || sent_ns < m_large_after_ns)
+    const bool carried = sent_ns < m_large_after_ns && bytes <= m_large_after_bytes;
+    if (sent_ns == kNeverNs || small || !raised || m_size == kQuicPmtuFloor || carried)
     {
         return false;
     }
     // Held full, the newest replaces the newest: the oldest kept begin the span.
     const u32 slot = (m_suspect_count < kQuicPmtuBlackHoleDetections) ? m_suspect_count++ : m_suspect_count - 1U;
     m_suspect_sent_ns[slot] = sent_ns;
+    m_suspect_bytes[slot] = bytes;
     u64 first_ns = sent_ns;
     for (u32 index = 0U; index < m_suspect_count; ++index)
     {

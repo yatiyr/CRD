@@ -331,6 +331,10 @@ void QuicPathControl::on_sent(QuicSpace space, const QuicSentPacket& packet, boo
                               const QuicRtt& rtt, u64 now_ns) noexcept
 {
     m_ecn.on_sent(space, packet.ecn, now_ns);
+    if (space == QuicSpace::Application && packet.ack_eliciting && !packet.path_probe && !packet.off_path)
+    {
+        m_pmtu.on_sent(packet.bytes);
+    }
     if (controlled)
     {
         m_controller->on_sent(congestion_packet(space, packet), in_flight, now_ns);

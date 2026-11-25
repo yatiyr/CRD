@@ -3528,11 +3528,12 @@ usize QuicConnection::datagram_limit(usize slot, usize out_bytes) const noexcept
     }
     const QuicPaths& paths = tuples(slot);
     const usize active = paths.active();
-    if (m_recovery->pto_count(slot) != 0U || (!paths.validated(active) && !(path.path() == paths.path(active))))
+    if (m_recovery->pto_count(slot) != 0U || path.path_mtu().canary() ||
+        (!paths.validated(active) && !(path.path() == paths.path(active))))
     {
-        // A probe timeout is pending: datagrams of the floor get an acknowledgement through a black hole that drops
-        // larger ones (quic_pmtu.hpp). Or the peer moved to a path not yet confirmed: the floor is all it is known
-        // to carry.
+        // A probe timeout is pending, or a suspected black hole's canary is due: datagrams of the floor get an
+        // acknowledgement through a black hole that drops larger ones (quic_pmtu.hpp). Or the peer moved to a path
+        // not yet confirmed: the floor is all it is known to carry.
         limit = min_u64(limit, kQuicPmtuFloor);
     }
     return limit;
