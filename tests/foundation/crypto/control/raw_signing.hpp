@@ -10,11 +10,13 @@
 // line. Options: "storage" keeps each signing's state where SigningKey::sign keeps it (the digest context on the stack,
 // bssl::ScopedEVP_MD_CTX, and the signature in a heap buffer); "copy" is SigningKey::sign's and
 // ProviderVerifier::verify's calls exactly, written here: the storage, a stack context for each verification too, and
-// ErrorScope's ERR_peek_error, clearing a queued error, after each call that succeeded.
+// ErrorScope's ERR_peek_error, clearing a queued error, after each call that succeeded; "slim" keeps the case's storage
+// in a session that holds no signature array of its own, so a thread's stack holds what SigningKey::sign's holds.
 #pragma once
 
 #include "threads_harness.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -37,10 +39,10 @@ using Verifier = bool (*)(const std::uint8_t* public_key, const std::uint8_t* si
 
 struct Options
 {
-    bool gate = false;
-    bool touch = false;
+    Start start;
     bool storage = false;
     bool copy = false;           // implies storage
+    bool slim = false;           // implies storage
     bool verify = true;          // false: each signing is not verified
     Verifier verifier = nullptr; // nullptr: the raw verification below
 };
@@ -119,17 +121,18 @@ inline void describe_refusal(const char* refused, char* reason, std::size_t size
     ERR_clear_error();
 }
 
-// One thread's signing state: plain (a heap context, the signature on the thread's stack) or the case's storage.
-struct Session
+// One thread's signing state: plain (a heap context, the signature in the session's `Inline` bytes on the thread's
+// stack) or the case's storage; a slim session (`Inline` 0) has only the case's.
+template <std::size_t Inline> struct Session
 {
     EVP_PKEY* key = nullptr;
     const std::uint8_t* public_key = nullptr;
     const Options* options = nullptr;
-    std::uint8_t stack_signature[kSignature] = {};
+    std::array<std::uint8_t, Inline> stack_signature = {};
     std::unique_ptr<std::uint8_t[]> heap_signature;
     std::size_t length = 0U;
 
-    std::uint8_t* signature() { return heap_signature ? heap_signature.get() : stack_signature; }
+    std::uint8_t* signature() { return heap_signature ? heap_signature.get() : stack_signature.data(); }
 
     bool sign(char* reason, std::size_t size)
     {
@@ -172,6 +175,24 @@ struct Session
     }
 };
 
+// Runs the four threads on `key`, each with a session of `Inline` signature bytes.
+template <std::size_t Inline> int run_sessions(const Options& options, EVP_PKEY* key, const std::uint8_t* public_key)
+{
+    return mldsa_threads::run(options.start,
+                              [&]
+                              {
+                                  Session<Inline> session;
+                                  session.key = key;
+                                  session.public_key = public_key;
+                                  session.options = &options;
+                                  if (options.storage || options.copy || options.slim)
+                                  {
+                                      session.heap_signature = std::make_unique<std::uint8_t[]>(kSignature);
+                                  }
+                                  return session;
+                              });
+}
+
 // Makes the key, runs the four threads on it and reports them: 0 clean, 1 a fault, 2 a setup failure.
 inline int run(const Options& options)
 {
@@ -192,21 +213,8 @@ inline int run(const Options& options)
         EVP_PKEY_free(key);
         return 2;
     }
-    const int result = mldsa_threads::run(
-        options.gate,
-        [&]
-        {
-            Session session;
-            session.key = key;
-            session.public_key = public_key;
-            session.options = &options;
-            if (options.storage || options.copy)
-            {
-                session.heap_signature = std::make_unique<std::uint8_t[]>(kSignature);
-            }
-            return session;
-        },
-        options.touch);
+    const int result =
+        options.slim ? run_sessions<0U>(options, key, public_key) : run_sessions<kSignature>(options, key, public_key);
     EVP_PKEY_free(key);
     return result;
 }

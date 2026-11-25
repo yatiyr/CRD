@@ -315,23 +315,27 @@ once on one outside `provider_cpu` (`affected`, the default: a Xeon from Sapphir
 otherwise it configures `win-asan`, builds `crd-crypto-tests` and the [programs that split the
 case](../../tests/foundation/crypto/control): `crd-mldsa-threads-control`, which makes the case's provider calls in its
 order through the same tree's AWS-LC alone (plain, with a start gate that releases the four first signings together,
-with the case's storage, both, and as `SigningKey::sign`'s and `ProviderVerifier::verify`'s exact calls), and
+with the case's storage, both, as `SigningKey::sign`'s and `ProviderVerifier::verify`'s exact calls, and those in a
+session without its own signature array or 1, 2 and 3 KiB lower on each thread's stack), and
 `crd-mldsa-threads-cerid`, the case through crd-crypto's `SigningKey` without the test program (plain, gated, warmed by
 one signing on the main thread, with its signatures outside the engine's allocator, with its key from a raw seed,
-verified by raw calls or not at all, and with each thread's stack touched, 512 KiB a page at a time, before its first
-signing: `cerid-touch`), and the control's raw calls inside its own process (plain, as crd-crypto's exact
-calls written in that program, and verified by `ProviderVerifier`). It runs
-[provider-host-check.py](../../scripts/provider-host-check.py): `provider_rounds` rounds (40 by default), each running
-every arm `provider_arms` names (every arm when empty) once alone in a fresh process, the case both directly and through
-CTest, then `provider_parallel` processes at once when that is not 0. An event is a nonzero exit, a timeout or a missing pass line, and a run over 5 s is counted as
-a stall; the summary tallies runs, events, stalls and the slowest run per arm and phase, failing logs are uploaded, and
-a leg with an event fails. An event in a control arm is AWS-LC's on that machine, the reproduction a [third-party
+verified by raw calls or not at all, with a raw session's in-object signature bytes (`cerid-pad`), and with each
+thread's stack touched, 512 KiB a page at a time, before its first signing, by instrumented code (`cerid-touch`) or by
+code AddressSanitizer does not instrument, which leaves the shadow untouched (`cerid-touch-stack`)), and the
+control's raw calls inside its own process (plain, as crd-crypto's exact calls written in that program, and verified by
+`ProviderVerifier`). It runs [provider-host-check.py](../../scripts/provider-host-check.py): `provider_rounds` rounds
+(40 by default), each running every arm `provider_arms` names (every arm when empty) once alone in a fresh process, the
+case both directly and through CTest, then `provider_parallel` processes at once when that is not 0. An event is a
+nonzero exit, a timeout or a missing pass line, and a run over 5 s is counted as a stall; the summary tallies runs,
+events, stalls and the slowest run per arm and phase, failing logs are uploaded, and a leg with an event fails. An event
+in a control arm (whatever its storage or shift) is AWS-LC's on that machine, the reproduction a [third-party
 entry](../third-party-defects.md) needs. Events in the `crd-mldsa-threads-cerid` arms beside clean controls put the
 cause in a program that links crd-crypto: on crd-crypto's path when its raw arm is clean, in that process when its raw
 arm fails too; events in the case alone put it in the test program. Between crd-crypto's arms, a crd-crypto signing that
 fails with its key from a raw seed and no verification, while the same calls written in the program (`raw-copy`) pass,
 leaves the code's build and placement and the thread's stack layout; a clean `cerid-touch` beside a failing `cerid`
-puts the trigger in the first signing's touch of new stack pages or their shadow. Clean legs mean too little exposure,
+puts the trigger in the first signing's touch of new stack pages or their shadow, and `cerid-touch-stack` tells the two
+apart. Clean legs mean too little exposure,
 never a verdict.
 
 The `experiment` input picks the legs (`all`, `fuzz`, `tsan`, `arm64-sanitizer-cost`, `x64-asan-stack-alignment`,

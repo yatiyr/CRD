@@ -8,11 +8,14 @@ win-asan-ml-dsa-threaded-signing-refused). This driver splits the refusal betwee
 program. Every round runs each arm once alone, in a fresh process (every sighting was a thread's first signing): the
 case from crd-crypto-tests, directly and through CTest (as the lane runs it); crd-mldsa-threads-control, the same
 provider calls through the same tree's AWS-LC alone, plain, with its threads' first signings released together (gate)
-with the case's storage (storage) and with SigningKey::sign's and ProviderVerifier::verify's calls exactly (copy); and
-crd-mldsa-threads-cerid, the case through crd-crypto's SigningKey without the test program, plain, gated, warmed by one
-signing on the main thread (warm), with its signatures outside the engine's allocator (std-buffer), its key from a raw
-seed (seed-key), verified by raw calls (raw-verify) or not at all (no-verify), with each thread's stack touched before
-its first signing (touch), and the control's raw AWS-LC calls made inside it (raw): plain, as SigningKey::sign's exact calls written in the program (raw-copy) and verified by
+with the case's storage (storage), with SigningKey::sign's and ProviderVerifier::verify's calls exactly (copy), and
+copy in a session without its own signature array (copy-slim) and 1, 2 and 3 KiB lower on each thread's stack
+(copy-shift-1k to -3k); and crd-mldsa-threads-cerid, the case through crd-crypto's SigningKey without the test program,
+plain, gated, warmed by one signing on the main thread (warm), with its signatures outside the engine's allocator
+(std-buffer), its key from a raw seed (seed-key), verified by raw calls (raw-verify) or not at all (no-verify), with a
+raw session's in-object signature bytes (pad), with each thread's stack touched before its first signing (touch) or
+touched by uninstrumented code, its AddressSanitizer shadow untouched (touch-stack), and the control's raw AWS-LC calls
+made inside it (raw): plain, as SigningKey::sign's exact calls written in the program (raw-copy) and verified by
 ProviderVerifier (raw-crd-verify). --arms runs only the named arms. With --parallel N a round then runs N processes at
 once, the arms in turn, as CTest's parallel jobs load the lane. An event is a nonzero exit, a timeout or a missing pass
 line; a stall is a run over STALL_SECONDS, counted apart. The driver exits 1 when any run had an event. It builds
@@ -48,6 +51,10 @@ ARMS = (('case', 'tests/crypto/crd-crypto-tests' + SUFFIX, (CASE,), 'All tests p
         ('control-storage', CONTROL, ('storage',), 'result: clean'),
         ('control-gate-storage', CONTROL, ('gate', 'storage'), 'result: clean'),
         ('control-copy', CONTROL, ('copy',), 'result: clean'),
+        ('control-copy-slim', CONTROL, ('copy', 'slim'), 'result: clean'),
+        ('control-copy-shift-1k', CONTROL, ('copy', 'shift=1024'), 'result: clean'),
+        ('control-copy-shift-2k', CONTROL, ('copy', 'shift=2048'), 'result: clean'),
+        ('control-copy-shift-3k', CONTROL, ('copy', 'shift=3072'), 'result: clean'),
         ('cerid', CERID, (), 'result: clean'),
         ('cerid-gate', CERID, ('gate',), 'result: clean'),
         ('cerid-warm', CERID, ('warm',), 'result: clean'),
@@ -55,7 +62,9 @@ ARMS = (('case', 'tests/crypto/crd-crypto-tests' + SUFFIX, (CASE,), 'All tests p
         ('cerid-seed-key', CERID, ('seed-key',), 'result: clean'),
         ('cerid-raw-verify', CERID, ('raw-verify',), 'result: clean'),
         ('cerid-no-verify', CERID, ('no-verify',), 'result: clean'),
+        ('cerid-pad', CERID, ('pad',), 'result: clean'),
         ('cerid-touch', CERID, ('touch',), 'result: clean'),
+        ('cerid-touch-stack', CERID, ('touch-stack',), 'result: clean'),
         ('cerid-raw', CERID, ('raw',), 'result: clean'),
         ('cerid-raw-copy', CERID, ('raw', 'copy'), 'result: clean'),
         ('cerid-raw-crd-verify', CERID, ('raw', 'crd-verify'), 'result: clean'))

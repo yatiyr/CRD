@@ -4,15 +4,15 @@
 // serve several threads" through crd-crypto's SigningKey and ProviderVerifier exactly as the case makes them (one
 // generated ML-DSA-65 key, each thread's signature in a containers::Array), without Catch2 or the test program, so a
 // fault here is crd-crypto's use of the provider and a fault only in the case is the test program's. Arguments, which
-// cross the key, the signing and the verification between crd-crypto and raw_signing.hpp's AWS-LC calls:
-//   "gate"        holds the threads at a start gate until all four exist;
-//   "touch"       has each thread touch its stack before its first signing (threads_harness.hpp);
+// cross the key, the signing and the verification between crd-crypto and raw_signing.hpp's AWS-LC calls, beside the
+// harness's own ("gate", "touch", "touch-stack", "shift=N"; threads_harness.hpp):
 //   "warm"        signs once on the main thread before they start, so no thread's signing is the key's first;
 //   "std-buffer"  keeps each thread's signature in a std::unique_ptr array instead of a containers::Array;
 //   "seed-key"    makes the SigningKey with from_seed over a RAND_bytes seed wiped by OPENSSL_cleanse, not generate
 //                 (random_bytes and secure_zero);
 //   "raw-verify"  verifies through raw_signing.hpp's calls instead of ProviderVerifier;
 //   "no-verify"   does not verify;
+//   "pad"         gives each thread's session a zeroed member of a signature's 3,309 bytes, as a raw session holds;
 //   "raw"         makes crd-mldsa-threads-control's AWS-LC calls instead of crd-crypto's, inside this program, so a
 //                 fault there is this program's process and not crd-crypto's calls; with "copy" the raw signing and
 //                 verification are SigningKey::sign's and ProviderVerifier::verify's calls exactly, written in this
@@ -20,14 +20,15 @@
 //                 ProviderVerifier.
 // A crd-crypto signing (SigningKey) with every other step raw failing while "raw copy" passes leaves what differs
 // between them: where the code is built and placed, and the thread's stack layout (a raw session holds its 3,309-byte
-// stack signature in the object even when it signs into the heap). Output as crd-mldsa-threads-control's
-// (threads_harness.hpp).
+// stack signature in the object even when it signs into the heap; "pad" gives a crd-crypto session the same). Output as
+// crd-mldsa-threads-control's (threads_harness.hpp).
 #include "raw_signing.hpp"
 #include "threads_harness.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/crypto/provider.hpp>
 
+#include <array>
 #include <cstdio>
 #include <memory>
 
@@ -42,17 +43,16 @@ using namespace crd::crypto;
 using Bytes = crd::containers::Array<u8>;
 
 // The arguments' indices in main's names and flags.
-constexpr unsigned kGate = 0U;
-constexpr unsigned kWarm = 1U;
-constexpr unsigned kStdBuffer = 2U;
-constexpr unsigned kSeedKey = 3U;
-constexpr unsigned kRawVerify = 4U;
-constexpr unsigned kNoVerify = 5U;
-constexpr unsigned kRaw = 6U;
-constexpr unsigned kCopy = 7U;
-constexpr unsigned kCrdVerify = 8U;
-constexpr unsigned kTouch = 9U;
-constexpr unsigned kFlagCount = 10U;
+constexpr unsigned kWarm = 0U;
+constexpr unsigned kStdBuffer = 1U;
+constexpr unsigned kSeedKey = 2U;
+constexpr unsigned kRawVerify = 3U;
+constexpr unsigned kNoVerify = 4U;
+constexpr unsigned kRaw = 5U;
+constexpr unsigned kCopy = 6U;
+constexpr unsigned kCrdVerify = 7U;
+constexpr unsigned kPad = 8U;
+constexpr unsigned kFlagCount = 9U;
 
 // One thread's signing state, as one thread of the case holds it.
 struct Session
@@ -97,6 +97,12 @@ struct Session
     }
 };
 
+// "pad": a session holding a raw session's in-object signature bytes beside its own.
+struct PaddedSession : Session
+{
+    std::array<u8, mldsa_threads::raw::kSignature> pad = {};
+};
+
 // "raw crd-verify": a raw signature verified by ProviderVerifier.
 bool provider_verifies(const std::uint8_t* public_key, const std::uint8_t* signature, std::size_t length)
 {
@@ -109,9 +115,9 @@ bool provider_verifies(const std::uint8_t* public_key, const std::uint8_t* signa
 // verifications at once. Returns the refused flag's complaint, or nullptr.
 const char* refused_crossing(const bool* flags)
 {
-    if (flags[kRaw] && (flags[kWarm] || flags[kStdBuffer] || flags[kSeedKey] || flags[kRawVerify]))
+    if (flags[kRaw] && (flags[kWarm] || flags[kStdBuffer] || flags[kSeedKey] || flags[kRawVerify] || flags[kPad]))
     {
-        return "warm, std-buffer, seed-key and raw-verify need crd-crypto's signing (no raw)";
+        return "warm, std-buffer, seed-key, raw-verify and pad need crd-crypto's signing (no raw)";
     }
     if (!flags[kRaw] && (flags[kCopy] || flags[kCrdVerify]))
     {
@@ -140,44 +146,15 @@ CryptoError make_key(SigningKey& key, bool seed_key)
     OPENSSL_cleanse(seed, sizeof(seed));
     return error;
 }
-} // namespace
 
-int main(int argc, char** argv)
+// Runs the four threads with sessions of type S on crd-crypto's key, after the main thread's signing with "warm".
+template <typename S>
+int run_sessions(const mldsa_threads::Start& start, const bool* flags, const SigningKey& key,
+                 const ProviderVerifier& verifier, const Bytes& pub)
 {
-    const char* const names[] = {"gate",      "warm", "std-buffer", "seed-key",   "raw-verify",
-                                 "no-verify", "raw",  "copy",       "crd-verify", "touch"};
-    bool flags[kFlagCount] = {};
-    if (!mldsa_threads::parse_flags(argc, argv, names, flags, kFlagCount))
-    {
-        return 2;
-    }
-    if (const char* complaint = refused_crossing(flags); complaint != nullptr)
-    {
-        std::printf("result: SETUP %s\n", complaint);
-        return 2;
-    }
-    if (flags[kRaw])
-    {
-        mldsa_threads::raw::Options options;
-        options.gate = flags[kGate];
-        options.touch = flags[kTouch];
-        options.copy = flags[kCopy];
-        options.verify = !flags[kNoVerify];
-        options.verifier = flags[kCrdVerify] ? &provider_verifies : nullptr;
-        return mldsa_threads::raw::run(options);
-    }
-    const ProviderVerifier verifier;
-    SigningKey key;
-    Bytes pub;
-    pub.resize(signature_sizes(AlgorithmId::MlDsa65).public_key);
-    if (make_key(key, flags[kSeedKey]) != CryptoError::None || key.public_key(pub) != CryptoError::None)
-    {
-        std::printf("result: SETUP the ML-DSA-65 key was refused\n");
-        return 2;
-    }
     const auto make = [&]
     {
-        Session session;
+        S session;
         session.key = &key;
         session.verifier = &verifier;
         session.pub = &pub;
@@ -194,7 +171,7 @@ int main(int argc, char** argv)
     };
     if (flags[kWarm])
     {
-        Session warm = make();
+        S warm = make();
         char reason[192];
         if (!warm.sign(reason, sizeof(reason)) || !warm.verify())
         {
@@ -202,5 +179,43 @@ int main(int argc, char** argv)
             return 2;
         }
     }
-    return mldsa_threads::run(flags[kGate], make, flags[kTouch]);
+    return mldsa_threads::run(start, make);
+}
+} // namespace
+
+int main(int argc, char** argv)
+{
+    const char* const names[] = {"warm", "std-buffer", "seed-key",   "raw-verify", "no-verify",
+                                 "raw",  "copy",       "crd-verify", "pad"};
+    bool flags[kFlagCount] = {};
+    mldsa_threads::Start start;
+    if (!mldsa_threads::parse_flags(argc, argv, names, flags, kFlagCount, start))
+    {
+        return 2;
+    }
+    if (const char* complaint = refused_crossing(flags); complaint != nullptr)
+    {
+        std::printf("result: SETUP %s\n", complaint);
+        return 2;
+    }
+    if (flags[kRaw])
+    {
+        mldsa_threads::raw::Options options;
+        options.start = start;
+        options.copy = flags[kCopy];
+        options.verify = !flags[kNoVerify];
+        options.verifier = flags[kCrdVerify] ? &provider_verifies : nullptr;
+        return mldsa_threads::raw::run(options);
+    }
+    const ProviderVerifier verifier;
+    SigningKey key;
+    Bytes pub;
+    pub.resize(signature_sizes(AlgorithmId::MlDsa65).public_key);
+    if (make_key(key, flags[kSeedKey]) != CryptoError::None || key.public_key(pub) != CryptoError::None)
+    {
+        std::printf("result: SETUP the ML-DSA-65 key was refused\n");
+        return 2;
+    }
+    return flags[kPad] ? run_sessions<PaddedSession>(start, flags, key, verifier, pub)
+                       : run_sessions<Session>(start, flags, key, verifier, pub);
 }

@@ -5561,9 +5561,10 @@ class TestInstruments(unittest.TestCase):
             self.assertEqual((rows[0]['runs'], rows[0]['stalls'], rows[1]['runs'], rows[1]['events']), (1, 1, 2, 1))
             self.assertEqual([arm[0] for arm in provider_host_check.ARMS],
                              ['case', 'case-ctest', 'control', 'control-gate', 'control-storage', 'control-gate-storage',
-                              'control-copy', 'cerid', 'cerid-gate', 'cerid-warm', 'cerid-std-buffer', 'cerid-seed-key',
-                              'cerid-raw-verify', 'cerid-no-verify', 'cerid-touch', 'cerid-raw', 'cerid-raw-copy',
-                              'cerid-raw-crd-verify'])
+                              'control-copy', 'control-copy-slim', 'control-copy-shift-1k', 'control-copy-shift-2k',
+                              'control-copy-shift-3k', 'cerid', 'cerid-gate', 'cerid-warm', 'cerid-std-buffer',
+                              'cerid-seed-key', 'cerid-raw-verify', 'cerid-no-verify', 'cerid-pad', 'cerid-touch',
+                              'cerid-touch-stack', 'cerid-raw', 'cerid-raw-copy', 'cerid-raw-crd-verify'])
             # --arms keeps ARMS order and refuses a name it does not know; empty runs every arm.
             self.assertEqual(provider_host_check.selected_arms(''), provider_host_check.ARMS)
             self.assertEqual([arm[0] for arm in provider_host_check.selected_arms(' cerid-raw,case ,cerid')],
