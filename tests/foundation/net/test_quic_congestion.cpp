@@ -2125,6 +2125,7 @@ struct LeoRun
     bool learned = false;           // the schedule at the end was learned
     i64 phase_offset_ns = 0;        // its phase less the handovers' at the end, within half a period
     u64 lock_ns = kNeverNs;         // when a learned schedule first came in force, from confirmation
+    u64 release_ns = kNeverNs;      // ... and last went out of force
 };
 
 std::ostream& operator<<(std::ostream& out, const LeoRun& run)
@@ -2134,7 +2135,8 @@ std::ostream& operator<<(std::ostream& out, const LeoRun& run)
                << run.min_mtu << ", taken " << run.handovers_lost << ", kept " << run.handover_losses
                << "; after: reductions " << run.after_reductions << ", undone " << run.after_undone << ", bytes "
                << run.after_bytes << " over " << run.measured << "; locks " << run.locks << ", learned " << run.learned
-               << ", phase offset " << run.phase_offset_ns / 1000 << " us, locked at " << run.lock_ns / kMs << " ms";
+               << ", phase offset " << run.phase_offset_ns / 1000 << " us, locked at " << run.lock_ns / kMs
+               << " ms, released at " << run.release_ns / kMs << " ms";
 }
 
 // The client sends `total` bytes over a 10 Mbit/s link with 40 ms round trips and a queue of one bandwidth-delay
@@ -2172,14 +2174,21 @@ LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& li
     u64 window_end = kNeverNs;
     CongestionState at_event;
     u64 read_at = 0U;
+    bool was_in_force = false;
     REQUIRE(pair.net->run_until(
         [&]
         {
             handovers.follow();
-            if (run.lock_ns == kNeverNs && pair.client.handover_learned())
+            const bool in_force = pair.client.handover_learned();
+            if (run.lock_ns == kNeverNs && in_force)
             {
                 run.lock_ns = pair.net->now - start;
             }
+            if (was_in_force && !in_force)
+            {
+                run.release_ns = pair.net->now - start;
+            }
+            was_in_force = in_force;
             const CongestionState state = pair.client.congestion().state();
             if (pair.net->now >= next_event)
             {
@@ -2229,11 +2238,12 @@ LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& li
 
 } // namespace
 
-TEST_CASE("QUIC handover: CUBIC and BBR keep their windows through a LEO link's scheduled handovers, which reduce them "
-          "without the schedule or with a wrong one",
+TEST_CASE("QUIC handover: CUBIC and BBR keep a LEO link's handovers 15 s apart from congestion control with the "
+          "schedule, and neither without it nor with a wrong one; no handover passes for a black hole",
           "[net][net-path][quic-connection][handover]")
 {
-    // Two handovers in a transfer of about 20 s: 60 ms lost each, then 30 ms more delay for 150 ms.
+    // Two handovers in a transfer of about 20 s: 60 ms lost each, then 30 ms more delay for 150 ms. What two
+    // handovers do to the windows is chance (one per seed); the 2 s case below counts it over many.
     constexpr u64 total = 24U << 20U;
     for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::Cubic, CongestionAlgorithm::Bbr})
     {
@@ -2248,16 +2258,106 @@ TEST_CASE("QUIC handover: CUBIC and BBR keep their windows through a LEO link's 
         INFO("off: " << off);
         CHECK(blind.handovers_lost >= 80U);
         CHECK(blind.handover_losses == 0U);
-        CHECK(off.handover_losses == 0U);
+        CHECK(off.handover_losses == 0U); // 7 s off a 15 s period covers nothing the link loses
         CHECK(aware.handover_losses >= 40U);
-        CHECK(aware.after_reductions < blind.after_reductions);
-        CHECK(aware.after_bytes > blind.after_bytes);
-        CHECK(aware.elapsed_ns < blind.elapsed_ns);
-        CHECK(off.after_reductions > aware.after_reductions);
-        CHECK(off.after_bytes < aware.after_bytes);
         // The handovers' losses never pass for a black hole: the path MTU search keeps its size.
         CHECK(blind.min_mtu == kQuicDefaultMaxDatagram);
         CHECK(aware.min_mtu == kQuicDefaultMaxDatagram);
+        CHECK(off.min_mtu == kQuicDefaultMaxDatagram);
+    }
+}
+
+namespace
+{
+// A LEO link handing over every 2 s, each handover's reductions counted net of those undone in the 500 ms after it.
+LeoLink leo_every_2s(usize seed, u64 first_ms)
+{
+    LeoLink link;
+    link.period_ns = 2000U * kMs;
+    link.after_ns = 500U * kMs;
+    link.first_ns = first_ms * kMs;
+    link.seed = seed;
+    return link;
+}
+
+i64 net_cuts(const LeoRun& run)
+{
+    return static_cast<i64>(run.after_reductions) - static_cast<i64>(run.after_undone);
+}
+} // namespace
+
+TEST_CASE("QUIC handover: over a LEO link handing over every 2 s, CUBIC and BBR are cut at nearly every handover "
+          "without the schedule or with a wrong one and seldom with it, and BBR ends sooner with it",
+          "[net][net-path][quic-connection][handover]")
+{
+    // About ten handovers a transfer. Each claim held in all 160 runs of each algorithm over seeds 0 to 3 and first
+    // handovers 3.0 to 4.9 s in 100 ms steps, before and after the packet's single entropy draw; these two are among
+    // them. On a queue of one bandwidth-delay product CUBIC's 0.7 cut still fills the pipe, so its speed either way
+    // is chance (blind less aware from -248 to +286 ms) and no claim; BBR's is not (aware slower once in 160, by
+    // 107 ms).
+    struct Leo
+    {
+        usize seed;
+        u64 first_ms;
+    };
+    constexpr Leo kRuns[] = {{1U, 3500U}, {3U, 4400U}};
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::Cubic, CongestionAlgorithm::Bbr})
+    {
+        const bool cubic = algorithm == CongestionAlgorithm::Cubic;
+        CongestionPolicy policy;
+        policy.algorithm = algorithm;
+        i64 blind_cuts = 0;
+        i64 aware_cuts = 0;
+        u64 blind_ns = 0U;
+        u64 aware_ns = 0U;
+        u64 off_ns = 0U;
+        for (const Leo& leo : kRuns)
+        {
+            INFO("algorithm " << static_cast<u32>(algorithm) << ", seed " << leo.seed << ", first handover "
+                              << leo.first_ms << " ms");
+            const LeoLink link = leo_every_2s(leo.seed, leo.first_ms);
+            const LeoRun blind = leo_transfer(policy, 24U << 20U, link, Aware::None);
+            const LeoRun aware = leo_transfer(policy, 24U << 20U, link, Aware::True);
+            const LeoRun off = leo_transfer(policy, 24U << 20U, link, Aware::Wrong);
+            INFO("blind: " << blind);
+            INFO("aware: " << aware);
+            INFO("off: " << off);
+            const i64 measured = static_cast<i64>(aware.measured);
+            CHECK(measured >= 9);
+            // Without the schedule, or with one 1 s off every handover (7 s folds into the 2 s period), the
+            // handovers' losses reach congestion control: a cut after every handover (CUBIC misses at most one,
+            // BBR's probing adds more).
+            const i64 at_least = cubic ? measured - 1 : measured;
+            CHECK(net_cuts(blind) >= at_least);
+            CHECK(net_cuts(off) >= at_least);
+            CHECK(blind.handover_losses == 0U);
+            // With it they are kept from it, about twenty a handover, and what still cuts is the queue's own
+            // overflow (CUBIC about every 2.7 s here) and BBR's probing.
+            CHECK(aware.handover_losses >= 10U * aware.measured);
+            CHECK(net_cuts(aware) < net_cuts(blind));
+            if (cubic)
+            {
+                CHECK(net_cuts(aware) * 2 <= measured);
+                CHECK(net_cuts(aware) + 4 <= net_cuts(blind));
+            }
+            CHECK(blind.min_mtu == kQuicDefaultMaxDatagram);
+            CHECK(aware.min_mtu == kQuicDefaultMaxDatagram);
+            CHECK(off.min_mtu == kQuicDefaultMaxDatagram);
+            blind_cuts += net_cuts(blind);
+            aware_cuts += net_cuts(aware);
+            blind_ns += blind.elapsed_ns;
+            aware_ns += aware.elapsed_ns;
+            off_ns += off.elapsed_ns;
+        }
+        INFO("algorithm " << static_cast<u32>(algorithm) << ": cuts " << blind_cuts << " blind, " << aware_cuts
+                          << " aware; " << blind_ns / kMs << " ms blind, " << aware_ns / kMs << " ms aware, "
+                          << off_ns / kMs << " ms off");
+        CHECK(aware_cuts * 2 <= blind_cuts);
+        if (!cubic)
+        {
+            CHECK(aware_ns < blind_ns);
+            CHECK(aware_ns < off_ns);
+        }
     }
 }
 
@@ -2284,12 +2384,7 @@ TEST_CASE("QUIC handover: a LEO link's delay spikes every 2 s reorder trains beh
                           << leo.first_ms << " ms, schedule " << static_cast<u32>(leo.aware));
         CongestionPolicy policy;
         policy.algorithm = leo.algorithm;
-        LeoLink link;
-        link.period_ns = 2000U * kMs;
-        link.after_ns = 500U * kMs;
-        link.first_ns = leo.first_ms * kMs;
-        link.seed = leo.seed;
-        const LeoRun run = leo_transfer(policy, 24U << 20U, link, leo.aware);
+        const LeoRun run = leo_transfer(policy, 24U << 20U, leo_every_2s(leo.seed, leo.first_ms), leo.aware);
         INFO(run);
         CHECK(run.handovers_lost >= 80U);
         CHECK(run.min_mtu == kQuicDefaultMaxDatagram);
@@ -2406,19 +2501,24 @@ TEST_CASE("QUIC handover: a congested path that never hands over teaches no sche
             CHECK_FALSE(run.learned);
         }
     }
-    // A handover every second until 12 s: the lock comes by 8 s and goes eleven quiet periods after the last.
+    // A handover every second from 3 s until 20 s. In 80 runs (seeds 0 to 3, first handovers 3.0 to 3.9 s, before
+    // and after the packet's single entropy draw) the lock came within eleven handovers, by 14 s, and went 12 to 26
+    // quiet periods after the last: the 16-period history holds it eleven, the queue's own disturbances in its
+    // window the rest.
     LeoLink stopping;
     stopping.period_ns = 1000U * kMs;
     stopping.guard_before_ns = 60U * kMs;
     stopping.guard_after_ns = 60U * kMs;
     stopping.after_ns = 500U * kMs;
-    stopping.stop_ns = 12000U * kMs;
+    stopping.stop_ns = 20000U * kMs;
     CongestionPolicy cubic;
-    const LeoRun run = leo_transfer(cubic, 30U << 20U, stopping, Aware::Learned);
+    const LeoRun run = leo_transfer(cubic, 64U << 20U, stopping, Aware::Learned);
     INFO(run);
-    REQUIRE(run.elapsed_ns >= 25000U * kMs);
+    REQUIRE(run.elapsed_ns >= 50000U * kMs);
     CHECK(run.locks == 1U);
-    CHECK(run.handover_losses != 0U);
+    CHECK(run.lock_ns <= 15000U * kMs);
+    CHECK(run.handover_losses >= 100U);
+    CHECK(run.release_ns >= stopping.stop_ns + 11U * stopping.period_ns);
     CHECK_FALSE(run.learned);
     // Handovers that only lose packets, to the end: the lock holds on the losses its own schedule covers, which the
     // learner still sees. CUBIC fills the 40 ms queue, so the packets the outage takes left up to that much before

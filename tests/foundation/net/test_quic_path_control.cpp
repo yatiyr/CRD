@@ -199,10 +199,12 @@ TEST_CASE("A path's loss reduces its own window and no other path's", "[path_con
     CHECK(two.b.congestion().window() == initial);
     CHECK(two.b.delivery().lost() == 0U);
 
-    // A spurious loss: its data was delivered after all.
+    // A spurious loss: its data was delivered after all, and the reduction it alone made is undone.
     two.a.on_spurious(QuicSpace::Application, sent, 100U * kMs, 120U * kMs);
     CHECK(two.a.delivery().delivered() == sent.bytes);
     CHECK(two.b.delivery().delivered() == 0U);
+    CHECK(two.a.congestion().window() == initial);
+    CHECK(two.a.congestion().state().undone == 1U);
 
     // Persistent congestion collapses one path's window to its floor.
     QuicLoss persistent;

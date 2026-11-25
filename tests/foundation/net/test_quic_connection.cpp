@@ -1484,7 +1484,8 @@ struct RawClient
     usize plain_id_frames = 0U;
     usize path_id_frames = 0U;
     bool path_response_seen = false;
-    bool seen[4096] = {};      // the server's 1-RTT packet numbers received
+    bool seen[4096] = {};         // the server's 1-RTT packet numbers received
+    bool bit_clear[4096] = {};    // ... and those of them sent with the QUIC bit greased to 0 (RFC 9287)
     bool further_seen[1024] = {}; // and its path ID 1 packet numbers
     usize eliciting_seen = 0U; // the server's ack-eliciting 1-RTT packets received
     u8 path_response[kQuicPathDataBytes] = {};
@@ -1578,6 +1579,7 @@ public:
     usize path_pad_to = kQuicMinInitialDatagram; // ... and one of send_on_path()
     QuicAddressDiscovery discovery = QuicAddressDiscovery::Off; // what the raw client's parameters offer
     bool multipath = false;  // the raw client's parameters offer initial_max_path_id (RFC 10069)
+    bool grease = false;     // ... and grease_quic_bit (RFC 9287)
     u64 max_path_id = 3U;    // ... as this
     bool empty_scid = false; // the raw client's own connection ID is zero-length
     u8 last[kDatagram] = {}; // the raw client's latest datagram, as sent
@@ -1617,6 +1619,7 @@ public:
         parameters.address_discovery = discovery;
         parameters.has_initial_max_path_id = multipath;
         parameters.initial_max_path_id = multipath ? max_path_id : 0U;
+        parameters.grease_quic_bit = grease;
         parameters.has_initial_source_connection_id = true;
         REQUIRE(parameters.initial_source_connection_id.assign(own_cid()));
         u8 encoded[512];
@@ -1626,6 +1629,7 @@ public:
         REQUIRE(raw.handshake.init(m_identity.client, ConstSpan<u8>(encoded, bytes)) == TlsError::None);
         REQUIRE(raw.protection.start(QuicSide::Client, QuicVersion::V1,
                                      ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid))) == CryptoError::None);
+        raw.protection.accept_cleared_quic_bit(grease);
         std::memcpy(raw.dcid, kInitialDcid, sizeof(kInitialDcid));
         raw.dcid_bytes = sizeof(kInitialDcid);
         QuicAccept accept;
@@ -1790,6 +1794,7 @@ public:
             if (opened.type == QuicPacketType::OneRtt && !further && opened.number < sizeof(raw.seen))
             {
                 raw.seen[opened.number] = true;
+                raw.bit_clear[opened.number] = (header.first & 0x40U) == 0U; // the QUIC bit, never protected
                 raw.eliciting_seen += eliciting ? 1U : 0U;
             }
             if (further && opened.number < sizeof(raw.further_seen))
@@ -2806,6 +2811,46 @@ TEST_CASE("QUIC connection: an acknowledgement of a skipped or unsent packet num
         run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return RawRun::ack(out, beyond); });
         CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
     }
+}
+
+TEST_CASE("QUIC connection: a skipped packet number and a greased QUIC bit are drawn independently",
+          "[net][4.2a][quic-connection]")
+{
+    // RFC 9000 section 21.4 skips a number unpredictably, and RFC 9287 section 3.1 asks for an unpredictable QUIC bit:
+    // the packet sent in a skipped number's place clears its QUIC bit as often as any other, so neither tells an
+    // observer of the other.
+    Identity identity;
+    RawRun run(identity);
+    run.grease = true;
+    run.handshake();
+    QuicFrame ping;
+    ping.kind = QuicFrameKind::Ping;
+    constexpr u64 kPackets = 3072U; // about 48 skips
+    for (usize round = 0U; round < 3U * kPackets && run.raw.largest[2] < kPackets; ++round)
+    {
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(ping, out); });
+    }
+    REQUIRE(run.raw.largest[2] >= kPackets);
+    usize packets = 0U;
+    usize cleared = 0U;
+    usize skips = 0U;
+    usize skips_cleared = 0U; // the packets in a skipped number's place sent with the QUIC bit 0
+    for (u64 number = 1U; number < run.raw.largest[2]; ++number)
+    {
+        packets += run.raw.seen[number] ? 1U : 0U;
+        cleared += run.raw.bit_clear[number] ? 1U : 0U;
+        if (!run.raw.seen[number] && run.raw.seen[number - 1U] && run.raw.seen[number + 1U]) // the raw run loses none
+        {
+            ++skips;
+            skips_cleared += run.raw.bit_clear[number + 1U] ? 1U : 0U;
+        }
+    }
+    INFO(packets << " packets, " << cleared << " cleared; " << skips << " skips, " << skips_cleared << " cleared");
+    CHECK(skips * 100U >= packets);      // about one in 64
+    CHECK(cleared * 5U >= packets * 2U); // about half
+    CHECK(cleared * 5U <= packets * 3U);
+    CHECK(skips_cleared * 5U >= skips);
+    CHECK(skips_cleared * 5U <= skips * 4U);
 }
 
 namespace
