@@ -2120,7 +2120,7 @@ struct LeoRun
     u64 after_reductions = 0U;      // reductions in the 2 s from each handover
     u64 after_undone = 0U;          // reductions undone then
     u64 after_bytes = 0U;           // bytes the server read then
-    u64 measured = 0U;              // handovers measured
+    u64 measured = 0U;              // handovers measured: those whose span after them ended before the transfer
     u64 locks = 0U;                 // learned schedules put in force
     bool learned = false;           // the schedule at the end was learned
     i64 phase_offset_ns = 0;        // its phase less the handovers' at the end, within half a period
@@ -2137,6 +2137,13 @@ std::ostream& operator<<(std::ostream& out, const LeoRun& run)
                << run.after_bytes << " over " << run.measured << "; locks " << run.locks << ", learned " << run.learned
                << ", phase offset " << run.phase_offset_ns / 1000 << " us, locked at " << run.lock_ns / kMs
                << " ms, released at " << run.release_ns / kMs << " ms";
+}
+
+// Whether `a` read more than `b` in the span after a measured handover, on average: two transfers whose lengths differ
+// measure different numbers of handovers.
+bool reads_more_after(const LeoRun& a, const LeoRun& b)
+{
+    return a.measured != 0U && b.measured != 0U && a.after_bytes * b.measured > b.after_bytes * a.measured;
 }
 
 // The client sends `total` bytes over a 10 Mbit/s link with 40 ms round trips and a queue of one bandwidth-delay
@@ -2196,7 +2203,6 @@ LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& li
                 read_at = bulk.read;
                 const bool measured = next_event >= start + link.measure_from_ns && next_event < handovers.stop_at;
                 window_end = measured ? next_event + link.after_ns : kNeverNs;
-                run.measured += measured ? 1U : 0U;
                 next_event += link.period_ns;
             }
             if (pair.net->now >= window_end)
@@ -2204,6 +2210,7 @@ LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& li
                 run.after_reductions += state.reductions - at_event.reductions;
                 run.after_undone += state.undone - at_event.undone;
                 run.after_bytes += bulk.read - read_at;
+                ++run.measured;
                 window_end = kNeverNs;
             }
             if (pair.net->now >= handovers.first_ns())
@@ -2300,7 +2307,7 @@ TEST_CASE("QUIC handover: over a LEO link handing over every 2 s, CUBIC and BBR 
         usize seed;
         u64 first_ms;
     };
-    constexpr Leo kRuns[] = {{1U, 3500U}, {3U, 4400U}};
+    constexpr Leo runs[] = {{1U, 3500U}, {3U, 4400U}};
     for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::Cubic, CongestionAlgorithm::Bbr})
     {
         const bool cubic = algorithm == CongestionAlgorithm::Cubic;
@@ -2311,7 +2318,7 @@ TEST_CASE("QUIC handover: over a LEO link handing over every 2 s, CUBIC and BBR 
         u64 blind_ns = 0U;
         u64 aware_ns = 0U;
         u64 off_ns = 0U;
-        for (const Leo& leo : kRuns)
+        for (const Leo& leo : runs)
         {
             INFO("algorithm " << static_cast<u32>(algorithm) << ", seed " << leo.seed << ", first handover "
                               << leo.first_ms << " ms");
@@ -2412,7 +2419,7 @@ TEST_CASE("QUIC handover: SCReAM and GCC hold their target rates through a hando
         INFO("aware: " << aware);
         CHECK(aware.handover_losses != 0U);
         CHECK(aware.min_target_rate > blind.min_target_rate);
-        CHECK(aware.after_bytes > blind.after_bytes);
+        CHECK(reads_more_after(aware, blind));
         CHECK(aware.elapsed_ns <= blind.elapsed_ns);
     }
     // GCC on the peer's receive times, through a 25 ms step alone: those of covered packets are no queue either.
@@ -2560,7 +2567,7 @@ TEST_CASE("QUIC handover: an outage inside the guards reaches no persistent cong
     CHECK(outlasting.min_window == minimum);
     CHECK(aware.min_window >= 20U * minimum);
     CHECK(aware.handover_losses != 0U);
-    CHECK(aware.after_bytes > blind.after_bytes);
+    CHECK(reads_more_after(aware, blind));
     CHECK(aware.elapsed_ns < blind.elapsed_ns);
 }
 
