@@ -338,9 +338,9 @@ arm fails too; events in the case alone put it in the test program. Between crd-
 fails with its key from a raw seed and no verification, while the same calls written in the program (`raw-copy`) pass,
 leaves the code's build and placement and the thread's stack layout; a clean `cerid-touch` beside a failing `cerid`
 puts the trigger in the first signing's touch of new stack pages or their shadow, and `cerid-touch-stack` tells the two
-apart. A tree without the sanitizer reads only on a leg where win-asan's `control-copy-slim` failed: clean there, the
-sanitizer is needed to reach it; clean beside a clean win-asan control, nothing is read. Clean legs mean too little
-exposure, never a verdict; `control-copy-slim` clean on ten affected legs retires TP-17.
+apart. A tree without the sanitizer reads only on a leg where win-asan's `control-copy-slim` failed: clean there, that
+build (its layout included) did not reach it on that machine; clean beside a clean win-asan control, nothing is read.
+Clean legs mean too little exposure, never a verdict; `control-copy-slim` clean on ten Xeon 6 legs retires TP-17.
 
 The `experiment` input picks the legs (`all`, `fuzz`, `tsan`, `arm64-sanitizer-cost`, `x64-asan-stack-alignment`,
 `udp-ring`, `provider-threads`, `vulkan-sdk-installer`). The ARM64 sanitizer-cost legs
