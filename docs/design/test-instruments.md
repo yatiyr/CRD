@@ -307,8 +307,21 @@ uploaded, and a leg with an event fails. The arms separate the causes: a hosted 
 control is a jobs defect, an event in the plain control anywhere is that machine's, and clean legs where this host
 faults put the fault on this host.
 
+Two provider legs (NET.2, [session](../sessions/2026-11-25-crypto-threaded-signing-control.md)) ask the same of
+the nonreproduced register's threaded ML-DSA signing entry: on hosted win-asan a thread's first
+signing with a shared ML-DSA-65 key was refused after 11 to 19 s, a second signing at once succeeding. Each leg
+(`windows-2025`) configures `win-asan`, builds `crd-crypto-tests` and
+[a Cerid-free control](../../tests/foundation/crypto/control/mldsa_threads_control.cpp), which makes the case's
+provider calls in its order through the same tree's AWS-LC alone, and runs
+[provider-host-check.py](../../scripts/provider-host-check.py): `provider_rounds` rounds (150 by default), each running
+both in fresh processes, once alone and then four processes at once, the arms alternating. An event is a nonzero exit,
+a timeout or a missing pass line, and a run over 5 s is counted as a stall; the summary tallies runs, events, stalls
+and the slowest run per arm and phase, failing logs are uploaded, and a leg with an event fails. An event in the
+control is AWS-LC's on that machine, the reproduction a [third-party entry](../third-party-defects.md) needs; events in
+the case beside a clean control put the cause in crd-crypto; clean legs mean too little exposure, never a verdict.
+
 The `experiment` input picks the legs (`all`, `fuzz`, `tsan`, `arm64-sanitizer-cost`, `x64-asan-stack-alignment`,
-`udp-ring`, `vulkan-sdk-installer`). The ARM64 sanitizer-cost legs
+`udp-ring`, `provider-threads`, `vulkan-sdk-installer`). The ARM64 sanitizer-cost legs
 (SIMD-DISPATCH, [session](../sessions/2026-10-29-simd-dispatch-arm64-asan-cost.md)) ask why linux-gcc-arm64-asan runs
 cases up to a thousand times slower than its debug lane, where linux-clang-arm64-asan and x64 GCC ASan stay within
 tens. One leg per ARM64 ASan preset (`ubuntu-24.04-arm`) builds the preset and a copy without UBSan, then times five

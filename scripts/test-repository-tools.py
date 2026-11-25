@@ -165,6 +165,10 @@ host_check_spec.loader.exec_module(fuzz_host_check)
 tsan_host_check_spec = importlib.util.spec_from_file_location('tsan_host_check', ROOT / 'scripts/tsan-host-check.py')
 tsan_host_check = importlib.util.module_from_spec(tsan_host_check_spec)
 tsan_host_check_spec.loader.exec_module(tsan_host_check)
+provider_host_check_spec = importlib.util.spec_from_file_location('provider_host_check',
+                                                                  ROOT / 'scripts/provider-host-check.py')
+provider_host_check = importlib.util.module_from_spec(provider_host_check_spec)
+provider_host_check_spec.loader.exec_module(provider_host_check)
 provenance_spec = importlib.util.spec_from_file_location('check_generated', ROOT / 'scripts/check-generated.py')
 provenance = importlib.util.module_from_spec(provenance_spec)
 provenance_spec.loader.exec_module(provenance)
@@ -5515,6 +5519,51 @@ class TestInstruments(unittest.TestCase):
         self.assertTrue(fuzz_host_check.find_unit('ckir-binary', 'ace35b97').is_file())
         with self.assertRaises(fuzz_host_check.fuzz.FuzzError):  # its own import of fuzz.py
             fuzz_host_check.find_unit('ceir-text', 'seed-')
+
+    def test_provider_host_check_counts_refusals_and_stalls_per_arm(self):
+        # NET.2 host separation: a run is clean only with a zero exit and its pass line; the Cerid case's refusal, the
+        # control's FAULT line and a timeout are events, and each run is timed to its own exit, so a slow run beside
+        # fast ones is the only stall and only failing runs keep their logs.
+        refused = ('FAILED:\n  CHECK( static_cast<int>(fault.signing) == static_cast<int>(CryptoError::None) )\n'
+                   'with message:\n  iteration 0, at once again 0, signing refused after 11307 ms, signing again at '
+                   'once 0\n')
+        self.assertEqual(provider_host_check.classify(1, refused, 'All tests passed'), 'exit 1')
+        self.assertEqual(provider_host_check.faults_in(refused)[0], 'FAILED:')
+        self.assertIn('signing refused after 11307 ms', provider_host_check.faults_in(refused)[1])
+        clean = 'thread 0: clean, first signing 12 ms\nthread 1: clean, first signing 431 ms\ncontrol: clean\n'
+        self.assertIsNone(provider_host_check.classify(0, clean, 'control: clean'))
+        self.assertEqual(provider_host_check.slowest_first_signing(clean), 431)
+        self.assertIsNone(provider_host_check.slowest_first_signing('All tests passed (10 assertions)\n'))
+        fault = ('thread 2: FAULT at iteration 0: EVP_DigestSign refused after 12700 ms (provider error none queued), '
+                 'signing again at once succeeded\ncontrol: FAULT\n')
+        self.assertEqual(provider_host_check.classify(1, fault, 'control: clean'), 'exit 1')
+        self.assertIn('EVP_DigestSign refused after 12700 ms', provider_host_check.faults_in(fault)[0])
+        self.assertEqual(provider_host_check.classify(0, 'thread 0: clean\n', 'control: clean'), 'no pass line')
+        self.assertEqual(provider_host_check.classify(0, clean, 'control: clean', timed_out=True), 'timeout')
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch = Path(scratch)
+            quick = [sys.executable, '-c', 'print("control: clean")']
+            slow = [sys.executable, '-c', 'import time; time.sleep(5.3); print("All tests passed")']
+            failing = [sys.executable, '-c', 'import sys; print(sys.argv[1]); sys.exit(1)', fault]
+            records = provider_host_check.run_batch([('cerid', slow), ('control', quick), ('control', failing)],
+                                                    scratch, 'contended', 3)
+            self.assertEqual([entry['event'] for entry in records], [None, None, 'exit 1'])
+            self.assertEqual([entry['stall'] for entry in records], [True, False, False])
+            self.assertLess(records[1]['wall_seconds'], 5.0)
+            self.assertEqual(records[2]['round'], 3)
+            self.assertTrue(Path(records[2]['log']).is_file())
+            self.assertEqual(sorted(path.name for path in scratch.iterdir()), ['control-contended-3-2.log'])
+            rows = provider_host_check.tally(records)
+            self.assertEqual([(row['arm'], row['phase']) for row in rows],
+                             [('cerid', 'alone'), ('cerid', 'contended'), ('control', 'alone'),
+                              ('control', 'contended')])
+            self.assertEqual((rows[1]['runs'], rows[1]['stalls'], rows[3]['runs'], rows[3]['events']), (1, 1, 2, 1))
+            self.assertEqual(provider_host_check.compiler_of(scratch), 'unknown')
+            (scratch / 'CMakeFiles/4.4.5').mkdir(parents=True)
+            (scratch / 'CMakeFiles/4.4.5/CMakeCXXCompiler.cmake').write_text(
+                'set(CMAKE_CXX_COMPILER "cl.exe")\nset(CMAKE_CXX_COMPILER_ID "MSVC")\n'
+                'set(CMAKE_CXX_COMPILER_VERSION "19.51.36231.0")\n', encoding='utf-8')
+            self.assertEqual(provider_host_check.compiler_of(scratch), 'MSVC 19.51.36231.0')
 
     def test_tsan_host_check_counts_every_failed_run_as_an_event(self):
         # JOBS-HARD.3 host separation: a run is clean only with a zero exit, no report line and its pass line; a

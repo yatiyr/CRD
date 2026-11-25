@@ -129,6 +129,12 @@ if(Python3_FOUND AND NOT CMAKE_CROSSCOMPILING)
                          ENVIRONMENT "PYTHONUTF8=1")
 endif()
 
+# The Cerid-free control of the host check's provider leg (docs/design/test-instruments.md#host-separation-diag10a):
+# the threaded ML-DSA-65 signing case's provider calls through this tree's own AWS-LC libcrypto alone, with the tree's
+# flags and the engine's warning set. Built only on request (scripts/provider-host-check.py runs it); never a CTest.
+add_executable(crd-mldsa-threads-control EXCLUDE_FROM_ALL control/mldsa_threads_control.cpp)
+target_link_libraries(crd-mldsa-threads-control PRIVATE crd-warnings crypto)
+
 # The policy decoder and store, the provider and the TLS sessions under the bounded fuzz harness, with their committed
 # corpora.
 add_subdirectory(fuzz)
