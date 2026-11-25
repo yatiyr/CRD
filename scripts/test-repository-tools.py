@@ -5561,7 +5561,18 @@ class TestInstruments(unittest.TestCase):
             self.assertEqual((rows[0]['runs'], rows[0]['stalls'], rows[1]['runs'], rows[1]['events']), (1, 1, 2, 1))
             self.assertEqual([arm[0] for arm in provider_host_check.ARMS],
                              ['case', 'case-ctest', 'control', 'control-gate', 'control-storage', 'control-gate-storage',
-                              'cerid', 'cerid-gate', 'cerid-warm', 'cerid-std-buffer', 'cerid-raw'])
+                              'control-copy', 'cerid', 'cerid-gate', 'cerid-warm', 'cerid-std-buffer', 'cerid-seed-key',
+                              'cerid-raw-verify', 'cerid-no-verify', 'cerid-raw', 'cerid-raw-copy',
+                              'cerid-raw-crd-verify'])
+            # --arms keeps ARMS order and refuses a name it does not know; empty runs every arm.
+            self.assertEqual(provider_host_check.selected_arms(''), provider_host_check.ARMS)
+            self.assertEqual([arm[0] for arm in provider_host_check.selected_arms(' cerid-raw,case ,cerid')],
+                             ['case', 'cerid', 'cerid-raw'])
+            self.assertEqual(provider_host_check.selected_arms('cerid-raw-copy')[0][2], ('raw', 'copy'))
+            with self.assertRaisesRegex(ValueError, 'unknown arm cerid-rwa'):
+                provider_host_check.selected_arms('cerid,cerid-rwa')
+            with self.assertRaisesRegex(ValueError, 'no arm named'):
+                provider_host_check.selected_arms(' , ')
             self.assertEqual(provider_host_check.compiler_of(scratch), 'unknown')
             (scratch / 'CMakeFiles/4.4.5').mkdir(parents=True)
             (scratch / 'CMakeFiles/4.4.5/CMakeCXXCompiler.cmake').write_text(

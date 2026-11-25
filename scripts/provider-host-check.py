@@ -8,15 +8,18 @@ win-asan-ml-dsa-threaded-signing-refused). This driver splits the refusal betwee
 program. Every round runs each arm once alone, in a fresh process (every sighting was a thread's first signing): the
 case from crd-crypto-tests, directly and through CTest (as the lane runs it); crd-mldsa-threads-control, the same
 provider calls through the same tree's AWS-LC alone, plain, with its threads' first signings released together (gate)
-and with the case's storage (storage); and crd-mldsa-threads-cerid, the case through crd-crypto's SigningKey without the
-test program, plain, gated, warmed by one signing on the main thread (warm) and with its signatures outside the engine's
-allocator (std-buffer), and the control's raw AWS-LC calls made inside it (raw). With --parallel N a round then runs N
-processes at once, the arms in turn, as CTest's parallel jobs load the lane. An event is a nonzero exit, a timeout or a
-missing pass line; a stall is a run over STALL_SECONDS, counted apart. The driver exits 1 when any run had an event. It
-builds nothing.
+with the case's storage (storage) and with SigningKey::sign's and ProviderVerifier::verify's calls exactly (copy); and
+crd-mldsa-threads-cerid, the case through crd-crypto's SigningKey without the test program, plain, gated, warmed by one
+signing on the main thread (warm), with its signatures outside the engine's allocator (std-buffer), its key from a raw
+seed (seed-key), verified by raw calls (raw-verify) or not at all (no-verify), and the control's raw AWS-LC calls made
+inside it (raw): plain, as SigningKey::sign's exact calls written in the program (raw-copy) and verified by
+ProviderVerifier (raw-crd-verify). --arms runs only the named arms. With --parallel N a round then runs N processes at
+once, the arms in turn, as CTest's parallel jobs load the lane. An event is a nonzero exit, a timeout or a missing pass
+line; a stall is a run over STALL_SECONDS, counted apart. The driver exits 1 when any run had an event. It builds
+nothing.
 
     python scripts/provider-host-check.py --build build/win-asan --rounds 40 --scratch <dir> --json <file> \
-        --summary "$GITHUB_STEP_SUMMARY"
+        [--arms case,cerid,cerid-raw] --summary "$GITHUB_STEP_SUMMARY"
 """
 import argparse
 import json
@@ -44,11 +47,17 @@ ARMS = (('case', 'tests/crypto/crd-crypto-tests' + SUFFIX, (CASE,), 'All tests p
         ('control-gate', CONTROL, ('gate',), 'result: clean'),
         ('control-storage', CONTROL, ('storage',), 'result: clean'),
         ('control-gate-storage', CONTROL, ('gate', 'storage'), 'result: clean'),
+        ('control-copy', CONTROL, ('copy',), 'result: clean'),
         ('cerid', CERID, (), 'result: clean'),
         ('cerid-gate', CERID, ('gate',), 'result: clean'),
         ('cerid-warm', CERID, ('warm',), 'result: clean'),
         ('cerid-std-buffer', CERID, ('std-buffer',), 'result: clean'),
-        ('cerid-raw', CERID, ('raw',), 'result: clean'))
+        ('cerid-seed-key', CERID, ('seed-key',), 'result: clean'),
+        ('cerid-raw-verify', CERID, ('raw-verify',), 'result: clean'),
+        ('cerid-no-verify', CERID, ('no-verify',), 'result: clean'),
+        ('cerid-raw', CERID, ('raw',), 'result: clean'),
+        ('cerid-raw-copy', CERID, ('raw', 'copy'), 'result: clean'),
+        ('cerid-raw-crd-verify', CERID, ('raw', 'crd-verify'), 'result: clean'))
 FAULT = re.compile(r'FAULT at iteration.*|signing refused after \d+ ms.*|FAILED:.*|==\d+==ERROR.*|result: SETUP.*')
 FIRST_SIGNING = re.compile(r'first signing (\d+) ms')
 STALL_SECONDS = 5.0
@@ -112,6 +121,18 @@ def run_batch(commands, scratch, phase, round_index):
     return [record(run['arm'], phase, round_index, -1 if run['timed_out'] else run['process'].returncode,
                    run['log'].read_text(encoding='utf-8', errors='replace'), run['wall'], run['timed_out'], run['log'])
             for run in runs]
+
+
+def selected_arms(text):
+    """The ARMS entries `text` names (comma-separated; kept in ARMS order; empty: every arm); ValueError on an unknown
+    name."""
+    if not text:
+        return ARMS
+    names = {name.strip() for name in text.split(',') if name.strip()}
+    unknown = sorted(names - {name for name, _, _, _ in ARMS})
+    if unknown or not names:
+        raise ValueError('unknown arm ' + ', '.join(unknown) if unknown else 'no arm named')
+    return tuple(arm for arm in ARMS if arm[0] in names)
 
 
 def tally(records):
@@ -184,15 +205,20 @@ def main(argv=None):
     parser.add_argument('--rounds', type=int, default=40, help='rounds; each runs every arm alone')
     parser.add_argument('--parallel', type=int, default=0,
                         help='then this many processes at once, the arms in turn (0: no contended phase)')
+    parser.add_argument('--arms', default='', help='comma-separated arms to run (default: every arm)')
     parser.add_argument('--scratch', required=True, help='scratch directory (the logs of failing runs)')
     parser.add_argument('--json', help='write the records as JSON')
     parser.add_argument('--summary', help='append the Markdown summary to this file')
     args = parser.parse_args(argv)
     if args.rounds < 1 or args.parallel < 0:
         parser.error('--rounds must be at least 1 and --parallel at least 0')
+    try:
+        arms = selected_arms(args.arms)
+    except ValueError as error:
+        parser.error(str(error))
     build = (Path(args.build) if os.path.isabs(args.build) else ROOT / args.build).resolve()
     programs = {}
-    for name, path, arguments, _ in ARMS:
+    for name, path, arguments, _ in arms:
         if path == CTEST:
             programs[name] = [shutil.which(CTEST) or CTEST, '--test-dir', str(build / 'tests/crypto'), *arguments]
             continue
@@ -207,9 +233,9 @@ def main(argv=None):
     host = host_identity(build)
     records = []
     for round_index in range(args.rounds):
-        batches = [('alone', [(name, programs[name])]) for name, _, _, _ in ARMS]
+        batches = [('alone', [(name, programs[name])]) for name, _, _, _ in arms]
         if args.parallel:
-            turn = [ARMS[(round_index * args.parallel + index) % len(ARMS)][0] for index in range(args.parallel)]
+            turn = [arms[(round_index * args.parallel + index) % len(arms)][0] for index in range(args.parallel)]
             batches.append(('contended', [(name, programs[name]) for name in turn]))
         for phase, commands in batches:
             for entry in run_batch(commands, scratch, phase, round_index):

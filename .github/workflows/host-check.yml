@@ -44,10 +44,14 @@ on:
         type: number
         default: 0
       provider_cpu:
-        description: 'provider-threads runners that run the rounds (intel: Intel CPUs only)'
+        description: 'provider-threads runners that run (affected: Xeons from Sapphire Rapids on; intel: any Intel)'
         type: choice
-        options: [intel, any]
-        default: intel
+        options: [affected, intel, any]
+        default: affected
+      provider_arms:
+        description: 'provider-threads arms, comma-separated (empty: every arm of scripts/provider-host-check.py)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -651,9 +655,10 @@ jobs:
     # win-asan-ml-dsa-threaded-signing-refused). Each leg builds the case and the programs that split it on win-asan: its
     # Cerid-free control (the same provider calls through the tree's AWS-LC alone) and the case through crd-crypto
     # without the test program (tests/foundation/crypto/control), and runs them in fresh processes
-    # (scripts/provider-host-check.py). The case has failed only on Intel Xeon runners (8573C, 6973P-C) and passed on AMD
-    # EPYC ones (7763, 9V45, 9V74), and the runner's CPU is drawn per job: six legs, each of which reads its CPU first
-    # and, unless provider_cpu is any, stops at once on a CPU that is not Intel's.
+    # (scripts/provider-host-check.py). The case has failed only on Emerald and Granite Rapids Xeon runners
+    # (8573C, 6973P-C) and passed on Ice Lake (8370C) and AMD EPYC ones (7763, 9V45, 9V74), and the runner's CPU is
+    # drawn per job: ten legs, each of which reads its CPU first and stops at once on a CPU outside provider_cpu
+    # (affected: a Xeon Platinum 84xx or 85xx or a Xeon 6, Sapphire Rapids on; intel: any Intel CPU; any).
     name: Host check (provider threads, leg ${{ matrix.leg }})
     if: inputs.experiment == 'all' || inputs.experiment == 'provider-threads'
     runs-on: windows-2025
@@ -664,7 +669,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [1, 2, 3, 4, 5, 6]
+        leg: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     steps:
       - name: Runner CPU
@@ -674,9 +679,14 @@ jobs:
           WANT: ${{ inputs.provider_cpu }}
         run: |
           $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()
-          $run = ($env:WANT -eq 'any') -or ($cpu -match 'Intel')
+          $run = switch ($env:WANT)
+          {
+            'any' { $true }
+            'intel' { $cpu -match 'Intel' }
+            default { $cpu -match 'Xeon.*\b(8[45]\d\d|6\d\d\d)' }
+          }
           "run=$($run.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          $verdict = if ($run) { 'runs' } else { 'skipped: the refusal has needed an Intel CPU' }
+          $verdict = if ($run) { 'runs' } else { "skipped: not a provider_cpu=$env:WANT CPU" }
           "### Provider threads on $cpu`: $verdict" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Checkout
@@ -744,11 +754,13 @@ jobs:
         env:
           ROUNDS: ${{ inputs.provider_rounds }}
           PARALLEL: ${{ inputs.provider_parallel }}
+          ARMS: ${{ inputs.provider_arms }}
           LEG: ${{ matrix.leg }}
         run: |
           $evidence = "$env:RUNNER_TEMP\host-check\evidence"
           New-Item -ItemType Directory -Force $evidence | Out-Null
           python scripts/provider-host-check.py --build build/win-asan --rounds $env:ROUNDS --parallel $env:PARALLEL `
+            --arms="$env:ARMS" `
             --scratch "$env:RUNNER_TEMP\host-check\work" --json "$evidence\host-check-provider-$env:LEG.json" `
             --summary "$env:GITHUB_STEP_SUMMARY"
           exit $LASTEXITCODE

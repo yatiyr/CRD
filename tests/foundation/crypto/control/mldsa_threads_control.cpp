@@ -4,17 +4,22 @@
 // built in the same tree with the same flags as crd-crypto's, and makes the case's provider calls in the case's order
 // (raw_signing.hpp). crd-crypto installs nothing into AWS-LC (no allocator, randomness or thread hook, no
 // initialization call). Arguments: "gate" holds the four threads at a start gate until all exist, so their first
-// signings overlap; "storage" keeps each signing's state where SigningKey::sign keeps it. Output as
-// threads_harness.hpp's: "result: clean" (0), "result: FAULT" (1) or "result: SETUP ..." (2).
+// signings overlap; "storage" keeps each signing's state where SigningKey::sign keeps it; "copy" makes
+// SigningKey::sign's and ProviderVerifier::verify's calls exactly, ErrorScope's queue peeks included (raw_signing.hpp).
+// Output as threads_harness.hpp's: "result: clean" (0), "result: FAULT" (1) or "result: SETUP ..." (2).
 #include "raw_signing.hpp"
 
 int main(int argc, char** argv)
 {
-    const char* const names[] = {"gate", "storage"};
-    bool flags[] = {false, false};
-    if (!mldsa_threads::parse_flags(argc, argv, names, flags, 2U))
+    const char* const names[] = {"gate", "storage", "copy"};
+    bool flags[] = {false, false, false};
+    if (!mldsa_threads::parse_flags(argc, argv, names, flags, 3U))
     {
         return 2;
     }
-    return mldsa_threads::raw::run(flags[0], flags[1]);
+    mldsa_threads::raw::Options options;
+    options.gate = flags[0];
+    options.storage = flags[1];
+    options.copy = flags[2];
+    return mldsa_threads::raw::run(options);
 }
