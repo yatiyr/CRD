@@ -35,8 +35,8 @@ Ran on this PC (WSL2 linux-gcc-debug, -release, linux-clang-fuzz; MSVC win-debug
   Learner: 80 runs locked by 14 s, released 31.98 to 45.99 s.
 - Teeth: without handover coverage the 2 s case fails 16 checks; with the bits correlated (`kSkipShift` 0) the
   draw case finds 0 of 45 skips cleared; without the undo call the path control case fails 2.
-- `crd-net-tests`: 1,208 cases, 1,200 passed, 8 skipped (debug and release); the changed cases on HEAD's engine and
-  on MSVC win-debug pass. 52 net CTests (corpus replays, guards) pass. libFuzzer connection: 18,096 runs clean.
+- `crd-net-tests`: 1,208 cases, 1,200 passed, 8 skipped (debug, release); changed cases pass on HEAD's engine and
+  MSVC (same skip counts). 52 net CTests pass. libFuzzer connection: 18,096 runs clean.
 - Board, interleaved with HEAD's build, five rounds: 660 against 661 MiB per CPU-second at 1 MiB windows, 494
   against 490 at 64 KiB: level within noise.
 
@@ -44,6 +44,6 @@ Ran on this PC (WSL2 linux-gcc-debug, -release, linux-clang-fuzz; MSVC win-debug
 
 1. CI first: the first finished run containing 02ea3dff and 2cff089a (MSVC, clang-cl, ARM64, TSan), and win-asan's
    TP-17 gate lines.
-2. The learner's keep rule: a held lock lingers 12 to 26 quiet periods after handovers stop, against the history's
-   eleven; give the keep a background-rate test as the lock has.
+2. Trace why a learned lock lingers 12 to 26 quiet periods after handovers stop (the history alone gives eleven),
+   then fix it (likely a background-rate test for the keep, as the lock has).
 3. Then `has_data` per datagram and the ACK rule on the bulk path.

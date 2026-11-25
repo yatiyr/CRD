@@ -2290,11 +2290,11 @@ TEST_CASE("QUIC handover: over a LEO link handing over every 2 s, CUBIC and BBR 
           "without the schedule or with a wrong one and seldom with it, and BBR ends sooner with it",
           "[net][net-path][quic-connection][handover]")
 {
-    // About ten handovers a transfer. Each claim held in all 160 runs of each algorithm over seeds 0 to 3 and first
-    // handovers 3.0 to 4.9 s in 100 ms steps, before and after the packet's single entropy draw; these two are among
-    // them. On a queue of one bandwidth-delay product CUBIC's 0.7 cut still fills the pipe, so its speed either way
-    // is chance (blind less aware from -248 to +286 ms) and no claim; BBR's is not (aware slower once in 160, by
-    // 107 ms).
+    // About ten handovers a transfer. Each per-run claim held in all 160 runs of each algorithm over seeds 0 to 3 and
+    // first handovers 3.0 to 4.9 s in 100 ms steps, before and after the packet's single entropy draw; these two are
+    // among them, and the sums over them (a single run of BBR can be cut nearly as often either way). On a queue of
+    // one bandwidth-delay product CUBIC's 0.7 cut still fills the pipe, so its speed either way is chance (blind less
+    // aware from -248 to +286 ms) and no claim; BBR's is not (aware slower once in 160, by 107 ms).
     struct Leo
     {
         usize seed;
