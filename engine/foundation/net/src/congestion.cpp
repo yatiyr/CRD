@@ -146,6 +146,12 @@ public:
         const u64 acks = m_acks.value_ns();
         return (acks != 0U && acks < m_paced.value_ns()) ? acks : m_paced.value_ns();
     }
+    // Measured finer than a send quantum's millisecond: a host the quantum covers.
+    [[nodiscard]] bool fine() const noexcept
+    {
+        const u64 turn_ns = ns();
+        return turn_ns != 0U && turn_ns < kSendQuantumNs;
+    }
 
 private:
     ShortestGap m_paced;
@@ -220,8 +226,9 @@ public:
         // A flight that starts from nothing in flight (after idle, or the first) bursts the initial window until the
         // window or the pacer holds it back. One the pacer held until a host turn longer than the round trip, whose
         // acknowledgements emptied it, did not idle: a game polling once a 60 Hz frame over a 2 ms path sent the
-        // initial window a frame.
-        const bool restart = in_flight <= packet.bytes && !(m_trains && m_turn.holding());
+        // initial window a frame. A host measured finer than a millisecond is released on time, and its emptied
+        // flight restarts: without that the loopback board's sender waited 29% longer a MiB at 64 KiB windows.
+        const bool restart = in_flight <= packet.bytes && !(m_trains && m_turn.holding() && !m_turn.fine());
         m_restarted = m_restarted || restart;
         m_restart_round = m_restart_round || restart;
         if (in_flight + m_datagram > m_window)

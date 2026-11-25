@@ -277,14 +277,14 @@ TEST_CASE("congestion: a held flight's burst is a millisecond of its pacing rate
         grown.limited = true;
         CHECK(Controller(policy_of(algorithm), kMss, &grown)->burst(rtt_of(10U * kMs, 10U * kMs)) == 12000U);
         grown.train_cap = 65536U; // a saved cap past one train is held to it
-        constexpr u64 kTrain = 54U * kMss;
+        constexpr u64 train = 54U * kMss;
         const Controller fast(policy_of(algorithm), kMss, &grown);
         CHECK(fast->burst(rtt_of(10U * kMs, 10U * kMs)) == 50000U);
         CHECK(fast->burst(rtt_of(20U * kMs, 20U * kMs)) == 25000U);
         // Faster still: one train at most, the 54 datagrams of 1200 bytes an IPv4 UDP payload carries. A slow or long
         // path: the initial window (RFC 9002 section 7.7), as with no round trip or no pacing.
-        CHECK(fast->burst(rtt_of(kMs, kMs)) == kTrain);
-        CHECK(fast->burst(rtt_of(1U, 1U)) == kTrain);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == train);
+        CHECK(fast->burst(rtt_of(1U, 1U)) == train);
         CHECK(fast->burst(rtt_of(10U * kSecond, 10U * kSecond)) == 12000U);
         CHECK(fast->burst(rtt_of(0U, 0U)) == 12000U);
         const Controller unpaced(policy_of(algorithm, false, false), kMss, &grown);
@@ -301,20 +301,20 @@ TEST_CASE("congestion: a held flight's burst is a millisecond of its pacing rate
         fast.send(1U, 4U, kMs, kMss);
         CHECK(fast->burst(rtt_of(kMs, kMs)) == 12000U);
         fast->on_limited(false, kMs);
-        CHECK(fast->burst(rtt_of(kMs, kMs)) == kTrain);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == train);
         fast.send(5U, 5U, kMs, 5U * kMss);
-        CHECK(fast->burst(rtt_of(kMs, kMs)) == kTrain);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == train);
         // So does a flight the window itself holds: its next packet would not fit.
         fast.send(6U, 6U, 2U * kMs);
         REQUIRE(fast->burst(rtt_of(kMs, kMs)) == 12000U);
         fast.send(7U, 7U, 2U * kMs, fast->window() - kMss);
-        CHECK(fast->burst(rtt_of(kMs, kMs)) == kTrain);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == train);
 
         // Nothing held back this round or the last (an application-limited sender): the initial window.
         const Controller limited(policy_of(algorithm), kMss, &grown);
         grown.limited = false;
         const Controller idle(policy_of(algorithm), kMss, &grown);
-        CHECK(limited->burst(rtt_of(kMs, kMs)) == kTrain);
+        CHECK(limited->burst(rtt_of(kMs, kMs)) == train);
         CHECK(idle->burst(rtt_of(kMs, kMs)) == 12000U);
 
         // An initial window past the cap (datagrams of 65000 bytes, two of them) is still the floor.
@@ -699,6 +699,33 @@ TEST_CASE("congestion: a flight restarted from nothing in flight paces at one wi
             CHECK(c->pacing_rate(rtt) == at(restarted));
             c.ack(20U, 20U * kMs, 30U * kMs, 10U * kMs, 10U * kMs);
             CHECK(c->pacing_rate(rtt) == at(125U));
+        }
+    }
+    // A flight the pacer held whose acknowledgements emptied it did not idle on a coarse host (a millisecond's turn
+    // or longer, or one not measured yet): a game polling once a frame sent the initial window a frame. A host
+    // measured finer is one the pacer releases on time, and its emptied flight restarts: the loopback board's
+    // acknowledgement-woken sender waited 162 us a MiB against 126 at 64 KiB windows without the restart.
+    for (const u64 turn : {u64{0U}, u64{20000U}, u64{250000U}, kMs, u64{16666667U}})
+    {
+        for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+        {
+            INFO("turn " << turn << " algorithm " << static_cast<int>(algorithm));
+            CongestionState host = grown;
+            host.host_turn_ns = turn;
+            host.train_cap = 54U * kMss; // a burst above the initial window unless the flight restarts
+            const Controller c(policy_of(algorithm), kMss, &host);
+            REQUIRE(c->state().host_turn_ns == turn);
+            const auto at = [&](u64 gain)
+            {
+                return c->window() * gain * (kNanosPerSecond / 100U) / rtt.smoothed_ns;
+            };
+            c.send(0U, 9U, 0U, 20U * kMss); // packets in flight: no restart
+            c->on_limited(false, 0U);       // the pacer holds the rest
+            c.ack(9U, 0U, 10U * kMs, 10U * kMs, 10U * kMs);
+            c.send(10U, 10U, 11U * kMs); // from nothing in flight, the pacer having held it
+            const bool fine = turn != 0U && turn < kMs;
+            CHECK(c->pacing_rate(rtt) == at(fine ? 100U : 125U));
+            CHECK((c->burst(rtt) == congestion_initial_window(policy_of(algorithm), kMss)) == fine);
         }
     }
     // Prague paces at its own rate, which a restart does not change.
