@@ -921,6 +921,28 @@ TEST_CASE("A send queue's call ends before a train it would cut, so a segmenting
     CHECK(socket.trains == 3U);
     CHECK(in_order());
 
+    // A host busy inside a cut batch keeps the rest queued in order for the next flush, and a datagram the host refuses
+    // is given up alone while the rest of its call leaves.
+    socket.sent_count = 0U;
+    push(177U, 1472U, kClient);
+    socket.busy_after = 60U;
+    flushed = queue.flush(set);
+    CHECK(flushed.sent == 60U);
+    CHECK(queue.queued() == 117U);
+    socket.busy_after = ~usize{0};
+    socket.refuse_next = true;
+    flushed = queue.flush(set);
+    CHECK(flushed.sent == 116U);
+    CHECK(flushed.dropped == 1U);
+    CHECK(queue.queued() == 0U);
+    REQUIRE(socket.sent_count == 176U);
+    bool kept = true;
+    for (usize index = 0U; index < socket.sent_count; ++index)
+    {
+        kept = kept && socket.sent[index].datagram.bytes[0] == static_cast<u8>((index < 60U) ? index : index + 1U);
+    }
+    CHECK(kept);
+
     // Without segmentation the batch is cut where it fills, each datagram its own message.
     socket.sent_count = 0U;
     socket.send_calls = 0U;
