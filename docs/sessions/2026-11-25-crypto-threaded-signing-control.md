@@ -46,15 +46,25 @@ thread's first signing was refused after 11,266 ms, and a second signing at once
     27/40, std-buffer 26/40.
   - So the cause is not AWS-LC alone, not Catch2 or the test program, not the key's first use and not the engine's
     allocator. No TP entry. Nothing is gated, so win-asan stays red whenever its shard draws an Intel Xeon.
-- Landed after it: a `raw` mode of `crd-mldsa-threads-cerid` (arm `cerid-raw`) that makes the control's AWS-LC calls
-  (now shared in `raw_signing.hpp`) inside the crd-crypto-linked program.
+- Then a `raw` mode of `crd-mldsa-threads-cerid` (arm `cerid-raw`): the control's AWS-LC calls, now shared in
+  `raw_signing.hpp`, made inside the crd-crypto-linked program.
+- **Host check 45547501396** (CPU-gated): four legs drew AMD and stopped. Two drew Intel CPUs.
+  - Leg 5, a Xeon 6973P-C: the case failed 27/40, through CTest 32/40. The crd-crypto arms failed 22-31/40.
+    `cerid-raw` was clean 40/40, and so were all four control arms (0/160).
+  - Leg 4, a Xeon Platinum 8370C (Ice Lake): every arm was clean. So the fault needs the newer Xeons (Emerald and
+    Granite Rapids), not every Intel CPU.
+- **Cause located:** crd-crypto's own runtime path. It is not that program's process, image or linked libraries,
+  because the same binary's raw calls pass. Both paths make the same provider calls in the same order. What only
+  crd-crypto does is:
+  - generate the seed through `random_bytes` and zero it with `secure_zero`;
+  - wrap each operation in `ErrorScope`, which calls `ERR_peek_error` after a successful call;
+  - verify through `signature_public_key`.
+  No TP entry. Nothing is gated, so win-asan stays red whenever its shard draws one of those Xeons.
 - Locally (i9-14900K, MSVC 19.51, also under SDE `-gnr`) every arm is clean. That proves only the tool.
 
 ## Next
 
-Redispatch `provider-threads` (CPU-gated) until a leg draws an Intel Xeon. On that leg `cerid-raw` decides:
-- it fails: the cause is the process of a program linking crd-crypto (a static initialiser, a TLS callback or a
-  symbol the linked engine libraries supply); bisect the linked libraries.
-- it is clean: the cause is crd-crypto's own compiled calls; bisect `SigningKey::sign`'s path and fix it with teeth.
-
-Then NET-PATH's `min_mtu` trace ([LEO case](2026-11-25-net-path-leo-case-trace.md), Next 1).
+Split crd-crypto's path one behaviour at a time, as `crd-mldsa-threads-cerid` raw sub-modes run on a CPU-gated
+dispatch: `ERR_peek_error` after each call, the key made by `SigningKey::from_seed`, and crd-crypto's verify. Then fix
+the cause in crd-crypto, with teeth on the failing Xeons. Then NET-PATH's `min_mtu` trace
+([LEO case](2026-11-25-net-path-leo-case-trace.md), Next 1).
