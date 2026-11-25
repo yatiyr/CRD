@@ -81,11 +81,16 @@ void QuicPathMtu::limit(u32 ceiling) noexcept
     }
 }
 
-u32 QuicPathMtu::probe(u64 now_ns, bool busy) noexcept
+bool QuicPathMtu::raise_due(u64 now_ns) const noexcept
 {
     const bool waiting =
         m_state == QuicPmtuState::Error || (m_state == QuicPmtuState::SearchComplete && m_size < m_ceiling);
-    if (waiting && busy && now_ns >= m_raise_ns)
+    return waiting && now_ns >= m_raise_ns;
+}
+
+u32 QuicPathMtu::probe(u64 now_ns, bool busy) noexcept
+{
+    if (busy && raise_due(now_ns))
     {
         // Section 5.2: the raise timer probes again, from the ceiling.
         m_state = (m_state == QuicPmtuState::Error) ? QuicPmtuState::Base : QuicPmtuState::Searching;

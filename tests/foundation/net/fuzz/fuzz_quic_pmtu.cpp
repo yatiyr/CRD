@@ -93,7 +93,12 @@ void run(World& w, u8 op, u8 p)
                 w.large_run = (bytes <= kQuicPmtuFloor) ? 0U : w.large_run + 1U;
                 break;
             }
+            // `busy` is read only when the raise timer is due: otherwise either answer leaves the same search.
+            const bool due = w.pmtu.raise_due(w.now);
+            QuicPathMtu other = w.pmtu;
             const u32 probe = w.pmtu.probe(w.now, (q & 1U) != 0U);
+            const u32 other_probe = other.probe(w.now, (q & 1U) == 0U);
+            CRD_FUZZ_REQUIRE(due || (other_probe == probe && other.state() == w.pmtu.state()));
             CRD_FUZZ_REQUIRE(w.pmtu.size() == before);
             if (probe == 0U)
             {

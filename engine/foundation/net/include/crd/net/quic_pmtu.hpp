@@ -93,6 +93,8 @@ public:
     // The size of the probe due at `now_ns`, 0 for none (one is in flight, or nothing is searched). `busy`: the
     // connection has data to send now, which a search the raise timer restarts waits for.
     [[nodiscard]] u32 probe(u64 now_ns, bool busy) noexcept;
+    // Whether probe() reads `busy` at `now_ns`: a settled or failed search whose raise timer has passed.
+    [[nodiscard]] bool raise_due(u64 now_ns) const noexcept;
     // The probe probe() named left.
     void on_probe_sent(u32 bytes) noexcept;
     // A probe of `bytes` was acknowledged (spuriously lost ones included), or declared lost.

@@ -203,11 +203,14 @@ TEST_CASE("QUIC PMTU: an IPv6 path probes its base first; a base that fails wait
     CHECK(broken.size() == kQuicPmtuFloor);
     CHECK(broken.counters().probes_lost == kQuicPmtuMaxProbes);
     const u64 raise = 5U * kSecond + kQuicPmtuRaiseNs;
+    CHECK(!broken.raise_due(raise - 1U));
     CHECK(broken.probe(raise - 1U, true) == 0U);
+    CHECK(broken.raise_due(raise));
     CHECK(broken.probe(raise, false) == 0U); // an idle connection is not kept alive by probes
     CHECK(broken.state() == QuicPmtuState::Error);
     CHECK(broken.probe(raise, true) == kQuicIpv6BaseDatagram);
     CHECK(broken.state() == QuicPmtuState::Base);
+    CHECK(!broken.raise_due(raise)); // a search under way reads no `busy`
     // The tunnel was repaired: the base, then the search.
     search(broken, 1400U, raise);
     CHECK(broken.size() == 1400U);
@@ -221,10 +224,13 @@ TEST_CASE("QUIC PMTU: a finished search below the ceiling probes again at its ra
     search(pmtu, 1400U, kSecond);
     REQUIRE(pmtu.size() == 1400U);
     const u64 raise = kSecond + kQuicPmtuRaiseNs;
+    CHECK(!pmtu.raise_due(raise - 1U));
     CHECK(pmtu.probe(raise - 1U, true) == 0U);
+    CHECK(pmtu.raise_due(raise));
     CHECK(pmtu.probe(raise, false) == 0U);
     CHECK(pmtu.probe(raise, true) == 1500U); // the ceiling again: the path may have grown
     CHECK(pmtu.state() == QuicPmtuState::Searching);
+    CHECK(!pmtu.raise_due(raise));
     CHECK(pmtu.size() == 1400U); // the size found holds while the search runs
     search(pmtu, 1480U, raise);
     CHECK(pmtu.size() == 1480U);

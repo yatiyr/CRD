@@ -1006,7 +1006,9 @@ private:
     // Sending.
     // The packet type `space` sends now: a client's 0-RTT for the Application space before it has 1-RTT keys.
     [[nodiscard]] QuicPacketType send_type(QuicSpace space) const noexcept;
-    [[nodiscard]] bool has_content(QuicSpace space, u64 now_ns) const noexcept;
+    // Whether `space` has anything to send in the datagram being written; `data_waiting` is what gate_data() found
+    // for the Application space's data, so that answer is not sought twice for a datagram.
+    [[nodiscard]] bool has_content(QuicSpace space, u64 now_ns, bool data_waiting) const noexcept;
     // Whether `space` holds data to send that only congestion control holds back.
     [[nodiscard]] bool has_data(QuicSpace space, u64 now_ns) const noexcept;
     // Whether `space` may carry data now: its storage has room and, in the Application space, congestion control lets
@@ -1028,8 +1030,8 @@ private:
     // come and no other path takes the data first (yields_data(), with send()'s `out_bytes` and `held_sockets`). Such
     // data held back while some waits tells the controller, and a window with room arms the pacer; a window left to
     // another path's data is the application's limit. A bandwidth probe wanting bytes counts as data waiting
-    // (m_probe_fill).
-    void gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 held_sockets) noexcept;
+    // (m_probe_fill). Returns whether the Application space's data waits (has_data()) when it opens it.
+    [[nodiscard]] bool gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 held_sockets) noexcept;
     // The largest datagram path slot `slot` sends into `out_bytes`: its datagram size and the peer's
     // max_udp_payload_size, the floor while a probe timeout is pending or its active 4-tuple is unconfirmed.
     [[nodiscard]] usize datagram_limit(usize slot, usize out_bytes) const noexcept;

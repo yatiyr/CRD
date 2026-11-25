@@ -2189,7 +2189,7 @@ QuicPacketType QuicConnection::send_type(QuicSpace space) const noexcept
     return packet_type(space);
 }
 
-bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
+bool QuicConnection::has_content(QuicSpace space, u64 now_ns, bool data_waiting) const noexcept
 {
     const usize index = quic_space_index(space);
     const usize slot = (space == QuicSpace::Application) ? send_slot() : 0U;
@@ -2217,7 +2217,8 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     {
         return true;
     }
-    return (data_allowed(space) && has_data(space, now_ns)) || (own_allowed(space) && own_ready(now_ns));
+    const bool waiting = (space == QuicSpace::Application) ? data_waiting : has_data(space, now_ns);
+    return (data_allowed(space) && waiting) || (own_allowed(space) && own_ready(now_ns));
 }
 
 bool QuicConnection::data_allowed(QuicSpace space) const noexcept
@@ -2289,7 +2290,7 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
            datagram_ready(now_ns, datagram_paths(false));
 }
 
-void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 held_sockets) noexcept
+bool QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 held_sockets) noexcept
 {
     const usize slot = send_slot();
     QuicPathControl& path = control(slot);
@@ -2303,10 +2304,11 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
     };
     const bool probing = owes(QuicSpace::Application) ||
                          (handshake_slot(slot) && (owes(QuicSpace::Initial) || owes(QuicSpace::Handshake)));
+    const QuicSpace application = QuicSpace::Application;
     if (probing)
     {
         m_data_open = true; // RFC 9002 section 7.5: probes are not held by the window or the pacer
-        return;
+        return has_data(application, now_ns);
     }
     const bool probe_wants =
         send_type(QuicSpace::Application) == QuicPacketType::OneRtt && path.congestion().probe_bytes() != 0U;
@@ -2314,7 +2316,6 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
     // after packet. The window's floor of two datagrams always holds one.
     const u64 in_flight = m_recovery->bytes_in_flight(slot);
     const bool room = in_flight + datagram <= path.congestion().window();
-    const QuicSpace application = QuicSpace::Application;
     const bool sendable = !m_space_gone[quic_space_index(application)] &&
                           m_protection.can_send(send_type(application)) && m_recovery->can_send_data(application, slot);
     if (yields_data(slot, out_bytes, now_ns, held_sockets))
@@ -2328,7 +2329,7 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
         m_own_open = room && release <= now_ns;
         if (!sendable)
         {
-            return;
+            return false;
         }
         if (!own_ready(now_ns))
         {
@@ -2345,20 +2346,21 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
                 path.arm_pace(release);
             }
         }
-        return;
+        return false;
     }
     const u64 release = path.release_ns(now_ns, m_recovery->rtt(slot));
     m_data_open = room && release <= now_ns;
     m_probe_fill = m_data_open && probe_wants; // a probe's fill is data: the window and the pacer hold it as any
     if (m_data_open)
     {
-        if (sendable && !has_data(application, now_ns) && !m_streams.has_frame(stream_route(true)))
+        const bool waiting = sendable && has_data(application, now_ns);
+        if (sendable && !waiting && !m_streams.has_frame(stream_route(true)))
         {
             // The window and the pacer allow sending and nothing waits: until what is in flight is delivered, a rate
             // sample shows the application's rate, not the path's (draft-ietf-ccwg-bbr-07 section 4.1.2.4).
             path.on_app_limited(in_flight);
         }
-        return;
+        return waiting;
     }
     if (sendable && (probe_wants || has_data(application, now_ns)))
     {
@@ -2369,6 +2371,7 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
             path.arm_pace(release);
         }
     }
+    return false;
 }
 
 bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
@@ -2975,8 +2978,8 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
         // timeout's floor, datagram_limit). The ACK it carries along is not yet owed: it rides only with other frames,
         // or a datagram waiting for room would draw ACK-only packets, one after another.
         used = write_datagrams(frames, used, packet, now_ns, written);
-        const bool streams = m_frame_count < m_config.sent_frames && m_streams.has_frame(stream_route(m_data_open));
-        if (ack_later && !early && (used != 0U || streams))
+        if (ack_later && !early &&
+            (used != 0U || (m_frame_count < m_config.sent_frames && m_streams.has_frame(stream_route(m_data_open)))))
         {
             put_ack();
         }
@@ -3445,7 +3448,7 @@ usize QuicConnection::send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sock
             return 0U;
         }
         m_marking = control(slot).marking(now_ns, m_recovery->persistent_congestion_ns(slot));
-        gate_data(full, out.size(), now_ns, held_sockets);
+        const bool waiting = gate_data(full, out.size(), now_ns, held_sockets);
         used = send_path_probe(out, now_ns);
         if (used != 0U)
         {
@@ -3462,7 +3465,8 @@ usize QuicConnection::send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sock
         {
             // Only the handshake slot carries the Initial and Handshake spaces.
             const auto space = static_cast<QuicSpace>(index);
-            content[index] = (handshake_slot(slot) || space == QuicSpace::Application) && has_content(space, now_ns);
+            content[index] =
+                (handshake_slot(slot) || space == QuicSpace::Application) && has_content(space, now_ns, waiting);
             if (content[index])
             {
                 last = static_cast<QuicSpace>(index);
@@ -3609,7 +3613,7 @@ usize QuicConnection::send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept
     {
         return 0U;
     }
-    const usize probe = path.probe(now_ns, has_data(application, now_ns));
+    const usize probe = path.probe(now_ns, path.path_mtu().raise_due(now_ns) && has_data(application, now_ns));
     if (probe == 0U || probe > out.size() || probe > amplification_credit(slot))
     {
         return 0U;
