@@ -23,23 +23,20 @@ Follows [the cross](2026-11-25-crypto-threaded-signing-cross.md), whose three ne
 ## Evidence
 
 - Built on win-asan (MSVC 19.51), win-clang-cl and linux-gcc-asan (GCC 13.3); clang-tidy 22 clean on both programs.
-- `cdb uf` on win-asan: `touch_stack_unchecked` has no `__asan_*` call, is not inlined, and has a 0x4048-byte frame
-  against `touch_stack`'s 0x40D8, with its `_asan_set_shadow_00` calls (32 frames each, both past 512 KiB).
-  `shifted` poisons only its allocation's redzones (`_asan_alloca_poison`).
-- Local driver round on the i9-14900K: all nine dispatch arms clean (this CPU has never failed). The SETUP refusals
-  (`shift=0`, `shift=65537`, `shift=12x`, `shift=`, `raw pad`) exit 2.
+- `cdb uf` on the final win-asan exe: `touch_stack_unchecked` has no `__asan_*` call, is not inlined, and has a
+  0x4048-byte frame against `touch_stack`'s 0x40E8 with its shadow calls (32 frames each, past 512 KiB). `shifted`
+  poisons only its allocation's redzones (`_asan_alloca_poison`).
+- Local driver round on the i9-14900K: all nine dispatch arms clean (this CPU has never failed). `shift=0`, `=65537`,
+  `=12x`, `=`, `bogus` and `raw pad` print their SETUP line and exit 2 (win-asan; `shift=99999` on GCC).
 
 ## Dispatched
 
-Host checks 45562483404 and 45562487761 on 94e5783e, arms `control-copy`, `control-copy-slim`,
-`control-copy-shift-1k`/`-2k`/`-3k`, `cerid`, `cerid-pad`, `cerid-touch` and `cerid-touch-stack`, so the baselines run
-on the same CPUs. They were queued behind CI 45559790834's 20 jobs when this note was written.
+Host checks 45562483404 and 45562487761 on 94e5783e: the six new arms with `control-copy`, `cerid` and `cerid-touch`
+as baselines on the same CPUs. They were queued behind CI 45559790834's 20 jobs when this note was written.
 
 ## Next
 
-Read both runs.
-- If any control arm fails, that is the Cerid-free reproduction: register it once in the third-party register and gate
-  the case.
-- If `cerid-pad` is clean, the layout difference is not the cause.
-- `cerid-touch-stack` clean means the stack pages are the trigger; failing means their shadow is.
-- If no Cerid-free arm fails, take one bounded step and then stop tracing.
+Read both runs: first which legs drew an affected CPU and whether `cerid` still fails there (this commit reshaped the
+thread lambda, so 52 of 80 is no control). Then: a failing control arm is the Cerid-free reproduction (register once,
+gate the case); a clean `cerid-pad` beside a failing `cerid` puts the cause in the layout, a failing one rules the
+in-object bytes out; `cerid-touch-stack` clean means stack pages, failing means their shadow.
