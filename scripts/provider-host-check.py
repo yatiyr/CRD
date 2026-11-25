@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
-"""Run the NET.2 provider host-separation rounds: the threaded ML-DSA-65 signing case beside its Cerid-free control.
+"""Run the NET.2 provider host-separation rounds: the threaded ML-DSA-65 signing case beside programs that split it.
 
 Contract: docs/design/test-instruments.md (host separation). On hosted win-asan, four threads signing with one ML-DSA-65
-SigningKey have had a thread's first signing refused (ProviderFailure) after 11 to 19 s, a second signing at once
+SigningKey have had a thread's first signing refused (ProviderFailure) after 10 to 19 s, a second signing at once
 succeeding, while the case passes in about 1 s (the nonreproduced register's
-win-asan-ml-dsa-threaded-signing-refused). This driver asks whether the refusal needs Cerid. Each round runs two arms
-in fresh processes (every sighting was a thread's first signing): the case from crd-crypto-tests and
-crd-mldsa-threads-control, which makes the same provider calls through the same tree's AWS-LC alone. A round runs each
-arm once alone, then `parallel` processes at once, the arms alternating, as CTest's parallel jobs load the lane. An
-event is a nonzero exit, a timeout or a missing pass line; a stall is a run over STALL_SECONDS, counted apart. The
-driver exits 1 when any run had an event. It builds nothing.
+win-asan-ml-dsa-threaded-signing-refused). This driver splits the refusal between AWS-LC, crd-crypto and the test
+program. Every round runs each arm once alone, in a fresh process (every sighting was a thread's first signing): the
+case from crd-crypto-tests, directly and through CTest (as the lane runs it); crd-mldsa-threads-control, the same
+provider calls through the same tree's AWS-LC alone, plain, with its threads' first signings released together (gate)
+and with the case's storage (storage); and crd-mldsa-threads-cerid, the case through crd-crypto's SigningKey without
+the test program, plain, gated, warmed by one signing on the main thread (warm) and with its signatures outside the
+engine's allocator (std-buffer). With --parallel N a round then runs N processes at once, the arms in turn, as
+CTest's parallel jobs load the lane. An event is a nonzero exit, a timeout or a missing pass line; a stall is a run
+over STALL_SECONDS, counted apart. The driver exits 1 when any run had an event. It builds nothing.
 
-    python scripts/provider-host-check.py --build build/win-asan --rounds 150 --parallel 4 --scratch <dir> \
-        --json <file> --summary "$GITHUB_STEP_SUMMARY"
+    python scripts/provider-host-check.py --build build/win-asan --rounds 40 --scratch <dir> --json <file> \
+        --summary "$GITHUB_STEP_SUMMARY"
 """
 import argparse
 import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -27,10 +31,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CASE = 'Provider: one verifier and one key serve several threads'
 SUFFIX = '.exe' if os.name == 'nt' else ''
-# name, the program's path in the tree, arguments, the line a passing run prints.
-ARMS = (('cerid', 'tests/crypto/crd-crypto-tests' + SUFFIX, (CASE,), 'All tests passed'),
-        ('control', 'tests/crypto/crd-mldsa-threads-control' + SUFFIX, (), 'control: clean'))
-FAULT = re.compile(r'FAULT at iteration.*|signing refused after \d+ ms.*|FAILED:.*|==\d+==ERROR.*|control: SETUP.*')
+CONTROL = 'tests/crypto/crd-mldsa-threads-control' + SUFFIX
+CERID = 'tests/crypto/crd-mldsa-threads-cerid' + SUFFIX
+# name, the program's path in the tree (CTEST: the ctest on PATH over the tree's crypto tests), arguments, the line a
+# passing run prints.
+CTEST = 'ctest'
+ARMS = (('case', 'tests/crypto/crd-crypto-tests' + SUFFIX, (CASE,), 'All tests passed'),
+        ('case-ctest', CTEST, ('-R', '^' + CASE + '$', '--no-tests=error', '--output-on-failure'),
+         '100% tests passed'),
+        ('control', CONTROL, (), 'result: clean'),
+        ('control-gate', CONTROL, ('gate',), 'result: clean'),
+        ('control-storage', CONTROL, ('storage',), 'result: clean'),
+        ('control-gate-storage', CONTROL, ('gate', 'storage'), 'result: clean'),
+        ('cerid', CERID, (), 'result: clean'),
+        ('cerid-gate', CERID, ('gate',), 'result: clean'),
+        ('cerid-warm', CERID, ('warm',), 'result: clean'),
+        ('cerid-std-buffer', CERID, ('std-buffer',), 'result: clean'))
+FAULT = re.compile(r'FAULT at iteration.*|signing refused after \d+ ms.*|FAILED:.*|==\d+==ERROR.*|result: SETUP.*')
 FIRST_SIGNING = re.compile(r'first signing (\d+) ms')
 STALL_SECONDS = 5.0
 TIMEOUT_SECONDS = 300
@@ -96,11 +113,13 @@ def run_batch(commands, scratch, phase, round_index):
 
 
 def tally(records):
-    """Per arm and phase: runs, events, stalls and the slowest run, in ARMS order."""
+    """Per arm and phase that ran: runs, events, stalls and the slowest run, in ARMS order."""
     rows = []
     for name, _, _, _ in ARMS:
         for phase in ('alone', 'contended'):
             mine = [entry for entry in records if entry['arm'] == name and entry['phase'] == phase]
+            if not mine:
+                continue
             rows.append({'arm': name, 'phase': phase, 'runs': len(mine),
                          'events': sum(1 for entry in mine if entry['event']),
                          'stalls': sum(1 for entry in mine if entry['stall']),
@@ -137,10 +156,10 @@ def compiler_of(build):
 
 
 def markdown(host, rounds, parallel, records):
-    lines = ['## Provider host check: threaded ML-DSA-65 signing and the Cerid-free control', '',
+    contended = f', then {parallel} processes at once' if parallel else ''
+    lines = ['## Provider host check: threaded ML-DSA-65 signing, its control and its crd-crypto program', '',
              f'CPU **{host["cpu"]}** ({host["logical_cpus"]} logical CPUs), {host["system"]}, {host["compiler"]}. '
-             f'{rounds} rounds; each runs every arm alone, then {parallel} processes at once. A stall is a run over '
-             f'{STALL_SECONDS:g} s.', '',
+             f'{rounds} rounds; each runs every arm alone{contended}. A stall is a run over {STALL_SECONDS:g} s.', '',
              '| Arm | Phase | Runs | Events | Stalls | Slowest s |', '|---|---|---|---|---|---|']
     for row in tally(records):
         lines.append(f'| {row["arm"]} | {row["phase"]} | {row["runs"]} | {row["events"]} | {row["stalls"]} | '
@@ -158,23 +177,27 @@ def markdown(host, rounds, parallel, records):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--build', required=True,
-                        help='a build tree with crd-crypto-tests and crd-mldsa-threads-control built')
-    parser.add_argument('--rounds', type=int, default=150, help='rounds; each runs every arm alone, then contended')
-    parser.add_argument('--parallel', type=int, default=os.cpu_count() or 4,
-                        help='processes at once in the contended phase, the arms alternating')
+                        help='a build tree with crd-crypto-tests, crd-mldsa-threads-control and '
+                             'crd-mldsa-threads-cerid built')
+    parser.add_argument('--rounds', type=int, default=40, help='rounds; each runs every arm alone')
+    parser.add_argument('--parallel', type=int, default=0,
+                        help='then this many processes at once, the arms in turn (0: no contended phase)')
     parser.add_argument('--scratch', required=True, help='scratch directory (the logs of failing runs)')
     parser.add_argument('--json', help='write the records as JSON')
     parser.add_argument('--summary', help='append the Markdown summary to this file')
     args = parser.parse_args(argv)
-    if args.rounds < 1 or args.parallel < 2:
-        parser.error('--rounds must be at least 1 and --parallel at least 2 (both arms in every contended batch)')
+    if args.rounds < 1 or args.parallel < 0:
+        parser.error('--rounds must be at least 1 and --parallel at least 0')
     build = (Path(args.build) if os.path.isabs(args.build) else ROOT / args.build).resolve()
     programs = {}
     for name, path, arguments, _ in ARMS:
+        if path == CTEST:
+            programs[name] = [shutil.which(CTEST) or CTEST, '--test-dir', str(build / 'tests/crypto'), *arguments]
+            continue
         program = build / path
         if not program.is_file():
             print(f'provider-host-check: {program} is not built (cmake --build <tree> --target crd-crypto-tests '
-                  'crd-mldsa-threads-control)', file=sys.stderr)
+                  'crd-mldsa-threads-control crd-mldsa-threads-cerid)', file=sys.stderr)
             return 2
         programs[name] = [str(program), *arguments]
     scratch = Path(args.scratch).resolve()
@@ -183,9 +206,9 @@ def main(argv=None):
     records = []
     for round_index in range(args.rounds):
         batches = [('alone', [(name, programs[name])]) for name, _, _, _ in ARMS]
-        contended = [(ARMS[index % len(ARMS)][0], programs[ARMS[index % len(ARMS)][0]])
-                     for index in range(args.parallel)]
-        batches.append(('contended', contended))
+        if args.parallel:
+            turn = [ARMS[(round_index * args.parallel + index) % len(ARMS)][0] for index in range(args.parallel)]
+            batches.append(('contended', [(name, programs[name]) for name in turn]))
         for phase, commands in batches:
             for entry in run_batch(commands, scratch, phase, round_index):
                 records.append(entry)
