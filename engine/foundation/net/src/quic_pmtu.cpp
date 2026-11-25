@@ -225,8 +225,8 @@ bool QuicPathMtu::end_detection(u64 now_ns, u64 rtt_ns) noexcept
     {
         first_ns = (m_suspect_sent_ns[index] < first_ns) ? m_suspect_sent_ns[index] : first_ns;
     }
-    // A reordering overtakes only what left within the delay it shed, less than a round trip; a path that stopped
-    // carrying large packets loses them for longer than that.
+    // A reordering overtakes only what left within the delay it shed, which the round trip they had includes; a path
+    // that stopped carrying large packets loses them for longer than that.
     if (m_suspect_count < kQuicPmtuBlackHoleDetections || sent_ns - first_ns < rtt_ns)
     {
         return false;

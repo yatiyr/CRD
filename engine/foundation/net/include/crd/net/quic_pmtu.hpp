@@ -22,10 +22,10 @@
 //              trip apart, fall back to 1200 bytes and search again below the size that failed. Congestion loses large
 //              packets too, but its acknowledgements of later large packets clear the suspicion. A reordering lets a
 //              small packet overtake large ones (a delay spike's end, a LEO handover's), and RFC 9002's time
-//              threshold may declare them lost a detection each: those left within the delay the path shed, less
-//              than the round trip, so the span keeps them from passing for a black hole. The connection sends
-//              1200-byte datagrams while a probe timeout is pending, so a path that carries nothing large still gets
-//              its acknowledgements through.
+//              threshold may declare them lost a detection each: those left within the delay the path shed, which
+//              the round trip they had includes, so the span keeps them from passing for a black hole. The
+//              connection sends 1200-byte datagrams while a probe timeout is pending, so a path that carries nothing
+//              large still gets its acknowledgements through.
 //   hints      an ICMP Packet Too Big message (RFC 8899 section 4.6) only lowers: once the connection matched its quote
 //              to a packet it sent (section 4.6.1), a probe above the hop's limit fails at once and the next probe
 //              tries the limit itself; a datagram of the size in use above it means the path shrank, and the size
