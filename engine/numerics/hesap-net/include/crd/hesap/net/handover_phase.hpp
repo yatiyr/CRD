@@ -14,7 +14,9 @@
 //               refuses the background rate (the other bins' disturbed share, with Laplace's rule of succession) at
 //               kLockAlpha after a Bonferroni correction for the kBins windows tried. A locked phase keeps while
 //               kMinKeep periods and a third of the observed ones disturb a window overlapping it, so a clock skew
-//               moves it period by period, and unlocks when they stop.
+//               moves it period by period, and the same test refuses the background at kKeepAlpha (the same 10^-3
+//               over the 2 kWindow - 1 windows tried), so a busy path's own disturbances (a queue's two-datagram RTT
+//               steps, its losses) never hold it: it unlocks when the handovers stop.
 //   phase       each disturbing period's first disturbance from the window's onset bin (its earliest bin disturbed
 //               in a third of those periods, so background events before the onset do not pull it early), as a line
 //               through the periods by the Theil-Sen estimator (Sen, JASA 63:1379, 1968), read at the period being
@@ -57,6 +59,9 @@ public:
     static constexpr crd::u64 kStepJitters = 8U;
     static constexpr crd::u64 kOneQ62 = crd::u64{1} << 62U;
     static constexpr crd::u64 kLockAlphaQ62 = kOneQ62 / (crd::u64{1000} * kBins); // 10^-3 over the windows
+    static constexpr crd::u64 kKeepAlphaQ62 = kOneQ62 / (crd::u64{1000} * (2U * kWindow - 1U)); // ... those kept
+    // A lock that just passed its test passes the keep's on the same window: no flapping.
+    static_assert(kKeepAlphaQ62 >= kLockAlphaQ62);
     static constexpr crd::u64 kMinPeriodNs = crd::u64{1000000000};
     static constexpr crd::u64 kMaxPeriodNs = crd::u64{3600000000000};
 

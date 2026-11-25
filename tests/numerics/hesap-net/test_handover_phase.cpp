@@ -277,6 +277,44 @@ TEST_CASE("HandoverPhaseLearner: the lock is released once the handovers stop, a
     CHECK(learner.phase() == hn::HandoverPhase{});
 }
 
+TEST_CASE("HandoverPhaseLearner: a busy path's own disturbances neither hold a lock once the handovers stop nor drop "
+          "it while they go on",
+          "[hesap-net][handover]")
+{
+    // A random loss a second disturbs about 38% of the periods in any two-bin window of a 15 s period: more than the
+    // third the keep rule asks, so without the binomial test the background alone held the lock for good.
+    for (const u64 until : {20U * kPeriod, ~u64{0}})
+    {
+        INFO("handovers until " << until / kSecond << " s");
+        LeoPath path;
+        path.first = 2500U * kMs;
+        path.background = 1U;
+        path.handovers_until = until;
+        Learner learner;
+        REQUIRE(learner.start(kPeriod));
+        path.run(learner, 0U, 16U * kPeriod);
+        REQUIRE(learner.phase().locked);
+        u32 held = 0U;
+        for (u32 period = 16U; period < 64U && learner.phase().locked; ++period)
+        {
+            path.run(learner, period * kPeriod, (period + 1U) * kPeriod);
+            held += learner.phase().locked ? 1U : 0U;
+        }
+        if (until == ~u64{0})
+        {
+            CHECK(held == 48U);
+            CHECK(distance(learner.phase().phase_ns, path.first, kPeriod) <= 12U * kMs);
+        }
+        else
+        {
+            // Four periods held by the handovers before they stop, then fewer than the eleven a quiet path takes.
+            CHECK(held >= 4U);
+            CHECK(held < 4U + 11U);
+            CHECK(learner.phase() == hn::HandoverPhase{});
+        }
+    }
+}
+
 TEST_CASE("HandoverPhaseLearner: time running backwards, jumping and at the clock's end leaves a valid estimate",
           "[hesap-net][handover]")
 {

@@ -2501,10 +2501,10 @@ TEST_CASE("QUIC handover: a congested path that never hands over teaches no sche
             CHECK_FALSE(run.learned);
         }
     }
-    // A handover every second from 3 s until 20 s. In 80 runs (seeds 0 to 3, first handovers 3.0 to 3.9 s, before
-    // and after the packet's single entropy draw) the lock came within eleven handovers, by 14 s, and went 12 to 26
-    // quiet periods after the last: the 16-period history holds it eleven, the queue's own disturbances in its
-    // window the rest.
+    // A handover every second from 3 s until 20 s. In 40 runs (seeds 0 to 3, first handovers 3.0 to 3.9 s) the lock
+    // came within eleven handovers, by 14 s, and went 8 to 13 quiet periods after the last, as the handovers left the
+    // 16-period history: the queue's own disturbances in its window (two-datagram RTT steps, losses) are refused as
+    // background, where they had held it up to 26.
     LeoLink stopping;
     stopping.period_ns = 1000U * kMs;
     stopping.guard_before_ns = 60U * kMs;
@@ -2518,7 +2518,8 @@ TEST_CASE("QUIC handover: a congested path that never hands over teaches no sche
     CHECK(run.locks == 1U);
     CHECK(run.lock_ns <= 15000U * kMs);
     CHECK(run.handover_losses >= 100U);
-    CHECK(run.release_ns >= stopping.stop_ns + 11U * stopping.period_ns);
+    CHECK(run.release_ns >= stopping.stop_ns + 7U * stopping.period_ns);
+    CHECK(run.release_ns <= stopping.stop_ns + 14U * stopping.period_ns);
     CHECK_FALSE(run.learned);
     // Handovers that only lose packets, to the end: the lock holds on the losses its own schedule covers, which the
     // learner still sees. CUBIC fills the 40 ms queue, so the packets the outage takes left up to that much before

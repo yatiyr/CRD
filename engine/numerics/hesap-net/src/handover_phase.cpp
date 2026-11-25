@@ -350,7 +350,8 @@ void HandoverPhaseLearner::evaluate() noexcept
     if (m_phase.locked)
     {
         const Window w = best(m_lock_start + kBins - (kWindow - 1U), 2U * kWindow - 1U);
-        if (w.hits >= kMinKeep && 3U * w.hits >= w.periods)
+        if (w.hits >= kMinKeep && 3U * w.hits >= w.periods &&
+            binomial_tail_q62(w.periods, w.hits, window_q62(w.start)) <= kKeepAlphaQ62)
         {
             next = HandoverPhase{true, onset_ns(w), w.hits, w.periods};
             m_lock_start = w.start;
