@@ -233,8 +233,12 @@ struct CongestionState
     u64 queue_delay_ns = 0U;
     u64 queue_delay_target_ns = 0U;
     // NewReno and CUBIC: the longest train their send quantum may be, which the path's losses teach (from the initial
-    // window to one host train of whole datagrams); 0 for any other controller and before version 8.
+    // window to one host train of whole datagrams, or a coarse host's turn of them); 0 for any other controller and
+    // before version 8.
     u64 train_cap = 0U;
+    // NewReno and CUBIC from version 8: how far apart the host's paced sends come while the pacer holds the flight,
+    // the shortest of the last few gaps; 0 before one is measured, for any other controller and before version 8.
+    u64 host_turn_ns = 0U;
     CongestionPhase phase = CongestionPhase::SlowStart;
     bool limited = false; // the window or the pacer held sending back this round (RFC 9002 section 7.8)
 };

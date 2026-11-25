@@ -33,6 +33,7 @@
 #include "quic_stream_fixture.hpp"
 
 #include <crd/net/quic_connection.hpp>
+#include <crd/net/udp.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
@@ -412,6 +413,58 @@ TEST_CASE("QUIC congestion: the pacer holds a window with room, and its release 
     // That one ran the credit into debt: the next waits for it.
     CHECK(pair.client.send(Span<u8>(out, sizeof(out)), release) == 0U);
     CHECK(pair.client.next_timer_ns() > release);
+}
+
+TEST_CASE("QUIC congestion: a connection an executor serves once a turn measures the turn, and once a millisecond "
+          "sends more than a train a turn",
+          "[net][net-path][quic-connection]")
+{
+    // The executor serves both ends once a turn (an event loop on a 1 ms timer, a game's 60 Hz frame): each turn's
+    // arrivals and timers run at the turn, then everything due leaves. The turns' acknowledgements and paced sends
+    // show the turn. At 1 ms over a 1 Gbit/s link with a 512 KiB queue, the bursts grow past a train (at most 65,507
+    // bytes): the second half of the transfer moves more than 1.5 trains a turn, where one train a turn held it.
+    struct Case
+    {
+        u64 turn_ns;
+        u64 rate;
+    };
+    for (const Case& c : {Case{kMs, 125000000U}, Case{16666667U, 12500000U}})
+    {
+        INFO("turn " << c.turn_ns);
+        Pair pair(CongestionPolicy{});
+        for (Path& path : pair.net->path)
+        {
+            path.delay_ns = kMs;
+        }
+        pair.net->path[0].rate = c.rate;
+        pair.net->path[0].buffer = 524288U;
+        pair.confirm();
+        Bulk bulk{pair.client, pair.server, 32U << 20U};
+        const u64 start = pair.net->now;
+        u64 at = start;
+        u64 half_at = 0U;
+        u64 half_read = 0U;
+        while (!bulk.step())
+        {
+            if (half_at == 0U && bulk.read >= bulk.total / 2U)
+            {
+                half_at = at;
+                half_read = bulk.read;
+            }
+            at += c.turn_ns;
+            REQUIRE(at - start < 60000U * kMs);
+            pair.net->run_at(at);
+            pair.net->flush();
+        }
+        CHECK(pair.client.congestion().state().host_turn_ns == c.turn_ns);
+        CHECK(pair.client.congestion().state().reductions == 0U);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        if (c.turn_ns == kMs)
+        {
+            const u64 turns = (at - half_at) / c.turn_ns;
+            CHECK((bulk.read - half_read) * 2U >= turns * u64{kMaxUdpPayloadV4} * 3U);
+        }
+    }
 }
 
 TEST_CASE("QUIC congestion: a full window holds data while ACK-only packets still go",

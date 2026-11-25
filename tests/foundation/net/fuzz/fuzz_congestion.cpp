@@ -34,11 +34,13 @@
 // and no other controller ever wants any. A window controller's burst is its initial window or, while its flight is
 // held back outside a recovery period, a millisecond of its pacing rate, at most its train cap and at least that
 // window, and the cap stays within that window and one train of whole datagrams (packets carry the train offsets
-// the input picks). The sampler's delivered bytes are what was acknowledged. The pacer's release time is never before
-// now, its credit stays within one burst above zero and the last send's burst below, and is positive at its release
-// time. A coupled NewReno is its coupling's one member until a swap, and a twin uncoupled NewReno fed every same event
-// keeps its state, window and pacing rate to the byte (RFC 6356: one path is Reno).
+// the input picks); on a host whose measured turn (a millisecond or more) at that rate passes a train, that turn's
+// whole datagrams instead. The sampler's delivered bytes are what was acknowledged. The pacer's release time is never
+// before now, its credit stays within one burst above zero and the last send's burst below, and is positive at its
+// release time. A coupled NewReno is its coupling's one member until a swap, and a twin uncoupled NewReno fed every
+// same event keeps its state, window and pacing rate to the byte (RFC 6356: one path is Reno).
 #include <crd/core/platform.hpp>
+#include <crd/core/wide_multiply.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/congestion.hpp>
 #include <crd/net/udp.hpp>
@@ -297,14 +299,24 @@ void check(const World& w)
         // A window controller's burst: the initial window, or while its flight is held back a millisecond of its
         // rate, the initial window at least and its train cap at most (the proven length, within it, while a probe is
         // out or a recovery period lasts). The cap stays within that window and the whole datagrams one host train
-        // carries (or is that window, when larger); before version 8 none is kept.
-        const u64 quantum = w.ctl->pacing_rate(rtt) / 1000U;
+        // carries (or is that window, when larger) until a host turn is measured; before version 8 neither is kept.
+        // On a host whose turn is a millisecond or more and at this rate passes a train, the burst is that turn's
+        // whole datagrams at most.
         const u64 initial = congestion_initial_window(w.policy, w.datagram);
         const u64 cap = (w.policy.version >= 8U) ? state.train_cap : initial;
         const u64 train = (u64{crd::net::kMaxUdpPayloadV4} / w.datagram) * w.datagram;
-        CRD_FUZZ_REQUIRE(cap >= initial && (cap <= train || cap == initial));
-        CRD_FUZZ_REQUIRE(w.policy.version >= 8U || state.train_cap == 0U);
-        const u64 capped = (quantum < cap) ? quantum : cap;
+        CRD_FUZZ_REQUIRE(cap >= initial && (cap <= train || cap == initial || state.host_turn_ns != 0U));
+        CRD_FUZZ_REQUIRE(cap <= crd::net::kCongestionMaxWindow || cap == initial);
+        CRD_FUZZ_REQUIRE(w.policy.version >= 8U || (state.train_cap == 0U && state.host_turn_ns == 0U));
+        u64 turn = (state.host_turn_ns >= 1000000U)
+                       ? crd::multiply_divide(w.ctl->pacing_rate(rtt), state.host_turn_ns, kNanosPerSecond)
+                       : 0U;
+        turn = (turn < crd::net::kCongestionMaxWindow) ? turn : crd::net::kCongestionMaxWindow;
+        const u64 turn_most = turn / w.datagram * w.datagram;
+        const u64 quantum = (turn_most > train) ? turn_most : w.ctl->pacing_rate(rtt) / 1000U;
+        const u64 most_cap = (turn_most > train) ? turn_most : train;
+        const u64 within = (cap < most_cap) ? cap : most_cap;
+        const u64 capped = (quantum < within) ? quantum : within;
         const u64 most = (capped > initial) ? capped : initial;
         const u64 burst = w.ctl->burst(rtt);
         CRD_FUZZ_REQUIRE(burst == initial || (state.limited && burst > initial && burst <= most));

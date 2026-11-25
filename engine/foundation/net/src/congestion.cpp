@@ -84,6 +84,75 @@ static_assert(kMaxUdpPayloadV4 / kQuicMinInitialDatagram <= kMaxTrainDatagrams);
     return max_u64(u64{kMaxUdpPayloadV4} / datagram, 1U) * datagram;
 }
 
+// The shortest gap between distinct instants over the last kHostTurnGaps gaps, published at each kHostTurnGaps-th.
+constexpr u32 kHostTurnGaps = 8U;
+class ShortestGap
+{
+public:
+    // An instant at `at_ns`; `counted` false starts the next gap without measuring this one.
+    void note(u64 at_ns, bool counted) noexcept
+    {
+        if (counted && m_last_ns != kNeverNs && at_ns > m_last_ns)
+        {
+            m_shortest_ns = min_u64(m_shortest_ns, at_ns - m_last_ns);
+            if (++m_gaps == kHostTurnGaps)
+            {
+                m_value_ns = m_shortest_ns;
+                m_shortest_ns = kNeverNs;
+                m_gaps = 0U;
+            }
+        }
+        m_last_ns = (m_last_ns == kNeverNs || at_ns > m_last_ns) ? at_ns : m_last_ns;
+    }
+    void seed(u64 value_ns) noexcept { m_value_ns = value_ns; }
+    // 0 before kHostTurnGaps gaps are measured.
+    [[nodiscard]] u64 value_ns() const noexcept { return m_value_ns; }
+
+private:
+    u64 m_last_ns = kNeverNs;
+    u64 m_shortest_ns = kNeverNs;
+    u64 m_value_ns = 0U;
+    u32 m_gaps = 0U;
+};
+
+// A host's turn: how far apart its paced sends come while the pacer holds its flight (neither the window nor the
+// application spacing them). An event loop that a coarse timer wakes, or a game frame that polls the transport, sends
+// once a turn whatever the pacer asks, so one train a turn held a host waking once a millisecond to 52% of 1 Gbit/s.
+// The shortest of the last kHostTurnGaps such gaps, so one stall of a host that wakes on time teaches nothing, and at
+// most the shortest gap between its ACK frames' instants, which a host that turns finer shows while the window holds
+// its flight and the pacer never does (a coarse host reads every ACK frame of a turn at that turn's instant).
+class HostTurn
+{
+public:
+    // The pacer held the flight back.
+    void held() noexcept { m_held = true; }
+    // It has since the last send instant.
+    [[nodiscard]] bool holding() const noexcept { return m_held; }
+    // `packet` left; a train of 0 bytes before it starts a send instant (Pacer::train).
+    void on_sent(const CongestionPacket& packet) noexcept
+    {
+        if (packet.train == 0U)
+        {
+            m_paced.note(packet.sent_ns, m_held);
+            m_held = false;
+        }
+    }
+    // An ACK frame ended at `now_ns`.
+    void on_ack(u64 now_ns) noexcept { m_acks.note(now_ns, true); }
+    void seed(u64 turn_ns) noexcept { m_paced.seed(turn_ns); }
+    // The turn in nanoseconds, 0 before one is measured.
+    [[nodiscard]] u64 ns() const noexcept
+    {
+        const u64 acks = m_acks.value_ns();
+        return (acks != 0U && acks < m_paced.value_ns()) ? acks : m_paced.value_ns();
+    }
+
+private:
+    ShortestGap m_paced;
+    ShortestGap m_acks;
+    bool m_held = false;
+};
+
 // The integer cube root, rounded down (Hacker's Delight, figure 11-5).
 [[nodiscard]] constexpr u64 cube_root(u64 x) noexcept
 {
@@ -127,6 +196,7 @@ public:
             m_train_before = m_train_cap;
             m_train_taught = true; // what another window controller learned grows on from it a datagram a round
         }
+        m_turn.seed(m_trains ? from.host_turn_ns : 0U); // the host's, whichever controller measured it
         m_window = min_u64(max_u64(from.window, m_minimum), kCongestionMaxWindow);
         m_threshold = max_u64(from.slow_start_threshold, m_minimum);
         m_recovery_start_ns = from.recovery_start_ns;
@@ -148,9 +218,12 @@ public:
             }
         }
         // A flight that starts from nothing in flight (after idle, or the first) bursts the initial window until the
-        // window or the pacer holds it back.
-        m_restarted = m_restarted || in_flight <= packet.bytes;
-        m_restart_round = m_restart_round || in_flight <= packet.bytes;
+        // window or the pacer holds it back. One the pacer held until a host turn longer than the round trip, whose
+        // acknowledgements emptied it, did not idle: a game polling once a 60 Hz frame over a 2 ms path sent the
+        // initial window a frame.
+        const bool restart = in_flight <= packet.bytes && !(m_trains && m_turn.holding());
+        m_restarted = m_restarted || restart;
+        m_restart_round = m_restart_round || restart;
         if (in_flight + m_datagram > m_window)
         {
             m_limited = true;
@@ -173,13 +246,21 @@ public:
         {
             m_probe_out = true;
         }
+        if (m_trains)
+        {
+            m_turn.on_sent(packet);
+        }
         sent(packet, in_flight, now_ns);
     }
 
-    void on_limited(bool /*window*/, u64 /*now_ns*/) noexcept override
+    void on_limited(bool window, u64 /*now_ns*/) noexcept override
     {
         m_limited = true; // section 7.8: the window or the pacer
         m_restarted = false;
+        if (!window)
+        {
+            m_turn.held();
+        }
     }
 
     void on_acked(const CongestionPacket& packet, u64 now_ns) noexcept override
@@ -205,6 +286,10 @@ public:
     void on_ack_end(const QuicRtt& rtt, bool sampled, u64 in_flight, u64 now_ns) noexcept override
     {
         ack_ended(rtt, in_flight);
+        if (m_trains)
+        {
+            m_turn.on_ack(now_ns);
+        }
         if (sampled && hystart_running())
         {
             m_round_min_ns = min_u64(m_round_min_ns, rtt.latest_ns);
@@ -224,7 +309,7 @@ public:
             m_samples = 0U;
             m_limited_before = m_limited;
             m_limited = false;
-            grow_train(now_ns);
+            grow_train(rtt, now_ns);
             if (m_phase == CongestionPhase::ConservativeSlowStart && ++m_css_rounds >= kHystartCssRounds)
             {
                 m_threshold = m_window; // RFC 9406: CSS_ROUNDS rounds in CSS end slow start
@@ -308,6 +393,11 @@ public:
         size_windows(min_u64(max_u64(bytes, kQuicMinInitialDatagram), kMaxDatagram));
         m_window = initial ? m_initial : max_u64(m_window, m_minimum);
         m_threshold = max_u64(m_threshold, m_minimum);
+        // The initial window is proven on any path (RFC 9002 section 7.7): a cap left under a larger datagram's made
+        // every train a probe that never settled, and a coarse host sent the initial window a turn for good.
+        m_train_cap = max_u64(m_train_cap, m_initial);
+        m_train_proven = max_u64(m_train_proven, m_initial);
+        m_train_before = max_u64(m_train_before, m_initial);
         resized();
     }
 
@@ -340,16 +430,19 @@ public:
     // would put a whole quantum into a shallow queue at once) keep the initial window, as does a policy before
     // version 8. A recovery period, as a probe out, bursts only the proven length: a growth not yet proven overflows
     // a queue the reduction left full, and the initial window alone held a coarse host's sends for the period to a
-    // fraction of a deep queue's link.
+    // fraction of a deep queue's link. A host whose turn's rate passes a train (HostTurn) bursts that turn's whole
+    // datagrams instead, as many trains as the host segments (SendQueue::send_through), within the same train cap.
     [[nodiscard]] u64 burst(const QuicRtt& rtt) const noexcept override
     {
         if (m_policy.version < 8U || m_restarted || !(m_limited || m_limited_before))
         {
             return m_initial;
         }
-        const u64 quantum = quantum_bytes(pacing_rate(rtt));
+        const u64 rate = pacing_rate(rtt);
+        const u64 most = turn_most(rate);
+        const u64 quantum = (most > m_quantum_max) ? most : quantum_bytes(rate);
         const bool proven = m_probe_out || m_phase == CongestionPhase::Recovery;
-        return max_u64(min_u64(min_u64(quantum, proven ? m_train_proven : m_train_cap), m_quantum_max), m_initial);
+        return max_u64(min_u64(min_u64(quantum, proven ? m_train_proven : m_train_cap), most), m_initial);
     }
 
     [[nodiscard]] CongestionState state() const noexcept override
@@ -363,6 +456,7 @@ public:
         out.phase = m_phase;
         out.limited = m_limited || m_limited_before;
         out.train_cap = m_trains ? m_train_cap : 0U;
+        out.host_turn_ns = m_trains ? m_turn.ns() : 0U;
         return out;
     }
 
@@ -405,7 +499,7 @@ protected:
 
     CongestionPolicy m_policy;
     u64 m_datagram = 0U;
-    u64 m_quantum_max = 0U; // quantum_max(m_datagram): the train cap's and the burst's most
+    u64 m_quantum_max = 0U; // quantum_max(m_datagram): one train, the burst's and the cap's most on a timely host
     u64 m_minimum = 0U;
     u64 m_window = 0U;
     u64 m_threshold = kCongestionMaxWindow;
@@ -414,6 +508,22 @@ private:
     [[nodiscard]] bool in_recovery(u64 sent_ns) const noexcept
     {
         return m_recovery_start_ns != kNeverNs && sent_ns <= m_recovery_start_ns;
+    }
+
+    // The most one host turn sends at once at `rate` bytes a second, the burst's and the train cap's: one train
+    // (quantum_max), or on a host whose turn is a send quantum's millisecond or longer the whole datagrams of that turn
+    // at that rate when more. A finer host is one the quantum covers: the loopback board's, its turn the
+    // acknowledgements that wake it, sent what each frame's room allowed past a train, 26 datagrams a message where
+    // one train a turn sends 44.
+    [[nodiscard]] u64 turn_most(u64 rate) const noexcept
+    {
+        const u64 turn_ns = m_turn.ns();
+        if (turn_ns < kSendQuantumNs)
+        {
+            return m_quantum_max;
+        }
+        const u64 bytes = min_u64(multiply_divide(rate, turn_ns, kNanosPerSecond), kCongestionMaxWindow);
+        return max_u64(bytes / m_datagram * m_datagram, m_quantum_max);
     }
 
     [[nodiscard]] CongestionPhase grown_phase() const noexcept
@@ -529,8 +639,9 @@ private:
 
     // A round ended at `now_ns`. The trains of the round before, which this one acknowledged, prove their length
     // unless this round lost a packet past the initial window of its train; a probe among them is then decided, and a
-    // proven cap that those trains reached grows once its wait is over.
-    void grow_train(u64 now_ns) noexcept
+    // proven cap that those trains reached grows once its wait is over, to one train and from there to the most a
+    // host turn sends at once (turn_most): a coarse host's growth past a train is its own probe.
+    void grow_train(const QuicRtt& rtt, u64 now_ns) noexcept
     {
         const u64 longest = min_u64(m_train_longest_before, m_train_cap);
         const u64 reached = max_u64(m_train_longest_before, m_train_longest); // the longest train of either round
@@ -559,8 +670,9 @@ private:
         {
             m_probe_since_ns = kNeverNs; // no probe is out: its period ends
         }
+        const u64 most = turn_most(pacing_rate(rtt));
         if (m_train_drain != 0U || m_probe_out || m_probe_sent_before || m_train_proven + m_datagram <= m_train_cap ||
-            m_train_cap >= m_quantum_max || reached + m_datagram <= m_train_proven)
+            m_train_cap >= most || reached + m_datagram <= m_train_proven)
         {
             // A probe is out or being judged, the cap is unproven (a probe goes again), it is whole, or neither
             // round's trains reached the proven length, so nothing longer is asked for.
@@ -577,7 +689,8 @@ private:
             m_train_wait -= (longest + m_datagram > m_train_proven) ? 1U : 0U; // a round whose trains reached it
             return;
         }
-        m_train_cap = min_u64(m_train_taught ? m_train_cap + m_datagram : 2U * m_train_cap, m_quantum_max);
+        const u64 grown = m_train_taught ? m_train_cap + m_datagram : 2U * m_train_cap;
+        m_train_cap = min_u64(grown, (m_train_cap < m_quantum_max) ? m_quantum_max : most);
     }
 
     void reduce_window(u64 now_ns, bool undoable) noexcept
@@ -682,6 +795,7 @@ private:
     bool m_probe_sent = false;           // a probe train left this round
     bool m_probe_sent_before = false;    // the round before
     bool m_probe_out = false;            // it ended, and the trains after it keep to the proven bytes
+    HostTurn m_turn;                     // the host's, which a turn's burst and the cap reach to
 
     // HyStart++.
     u64 m_round_min_ns = kNeverNs;

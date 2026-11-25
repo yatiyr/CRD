@@ -1236,3 +1236,173 @@ TEST_CASE("congestion: under coarse host turns the train cap meets the initial w
         }
     }
 }
+
+TEST_CASE("congestion: a host's turn is the shortest gap of its last eight paced send instants, and only the pacer's "
+          "holds count",
+          "[net][net-path][congestion]")
+{
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        INFO("algorithm " << static_cast<int>(algorithm));
+        const Controller c(policy_of(algorithm), kMss);
+        u64 now = kSecond;
+        u64 number = 0U;
+        // Each instant: the pacer (or the window, when `paced` is false) held the flight for `gap_ns`, then a train
+        // of two leaves.
+        const auto instant = [&](u64 gap_ns, bool paced)
+        {
+            c->on_limited(!paced, now);
+            now += gap_ns;
+            CongestionPacket first;
+            first.bytes = kMss;
+            first.number = number++;
+            first.sent_ns = now;
+            first.space = QuicSpace::Application;
+            CongestionPacket second = first;
+            second.number = number++;
+            second.train = kMss;
+            c->on_sent(first, 200000U, now);
+            c->on_sent(second, 201200U, now);
+        };
+        instant(0U, true);
+        for (u32 i = 0U; i < 7U; ++i)
+        {
+            instant(kMs, true);
+        }
+        CHECK(c->state().host_turn_ns == 0U); // seven gaps: none measured yet
+        instant(kMs, true);
+        CHECK(c->state().host_turn_ns == kMs);
+        // A stall among them, and gaps the window held (a window-limited host sends when ACKs open it), teach nothing.
+        instant(50U * kMs, true);
+        for (u32 i = 0U; i < 4U; ++i)
+        {
+            instant(20U * kMs, false);
+            instant(kMs, true);
+        }
+        instant(3U * kMs, true);
+        instant(2U * kMs, true);
+        CHECK(c->state().host_turn_ns == kMs); // seven gaps of the next eight
+        instant(2U * kMs, true);
+        CHECK(c->state().host_turn_ns == kMs);
+        // A host that turns finer is followed within eight gaps.
+        for (u32 i = 0U; i < 8U; ++i)
+        {
+            instant(10000U, true);
+        }
+        CHECK(c->state().host_turn_ns == 10000U);
+        // A timely host whose flight the window holds, its ACKs a millisecond apart, sends that far apart too: that
+        // is no turn, over two blocks of eight gaps.
+        for (u32 i = 0U; i < 16U; ++i)
+        {
+            instant(kMs, false);
+        }
+        CHECK(c->state().host_turn_ns == 10000U);
+        for (u32 i = 0U; i < 8U; ++i)
+        {
+            instant(kMs, true);
+        }
+        REQUIRE(c->state().host_turn_ns == kMs);
+        // A 1 kHz host whose turns jitter around the millisecond measures its shortest, under the millisecond that
+        // multi-train turns need (turn_most): it keeps one train a turn.
+        for (u32 i = 0U; i < 8U; ++i)
+        {
+            instant((i % 2U == 0U) ? 950000U : 1050000U, true);
+        }
+        CHECK(c->state().host_turn_ns == 950000U);
+        // One that turns finer while the window holds its flight and the pacer never does is followed too: its ACK
+        // frames come 20 us apart, where a coarse host reads all of a turn's at that turn.
+        for (u32 i = 0U; i < 10U; ++i)
+        {
+            now += (i == 4U) ? 0U : 20000U;
+            c.ack(i, kSecond, now, 2U * kMs, 2U * kMs);
+        }
+        CHECK(c->state().host_turn_ns == 20000U);
+        // A live swap keeps the host's turn; a policy before version 8, or Prague, measures none.
+        CongestionState held = c->state();
+        CHECK(Controller(policy_of(algorithm == CongestionAlgorithm::Cubic ? CongestionAlgorithm::NewReno
+                                                                           : CongestionAlgorithm::Cubic),
+                         kMss, &held)
+                  ->state()
+                  .host_turn_ns == 20000U);
+        CongestionPolicy seven = policy_of(algorithm);
+        seven.version = 7U;
+        CHECK(Controller(seven, kMss, &held)->state().host_turn_ns == 0U);
+        CHECK(Controller(policy_of(CongestionAlgorithm::Prague), kMss, &held)->state().host_turn_ns == 0U);
+    }
+}
+
+TEST_CASE("congestion: a host that wakes once a turn bursts that turn's whole datagrams past one train where the queue "
+          "takes them, and a stall or a timely host keeps one train",
+          "[net][net-path][congestion]")
+{
+    // One train a 1 ms turn is 54 datagrams of 1200 bytes, 518 Mbit/s: 52% of 1 Gbit/s whatever the queue. A deep
+    // queue takes a turn's two trains and more; a 64 KiB one (54 datagrams) none past the first, which a probe finds
+    // out at the cost of its datagrams and no congestion event. A game that polls the transport once a 60 Hz frame
+    // sent 31 Mbit/s, and over a 2 ms path, which its acknowledgements emptied each frame, the initial window a frame.
+    constexpr u64 gigabit = 125000000U;
+    constexpr u64 hundred_megabit = 12500000U;
+    constexpr u64 train = 54U * kMss;
+    constexpr u64 frame = 16666667U;
+    struct Path
+    {
+        u64 rate;
+        u64 turn_ns;
+        u64 queue;
+        u64 one_way_ns;
+        u64 percent;    // of the link at least
+        u64 drops;      // at most
+        u64 reductions; // at most
+    };
+    const Path paths[] = {{gigabit, kMs, 262144U, kMs, 90U, 700U, 20U},
+                          {gigabit, kMs, 262144U, 10U * kMs, 85U, 400U, 8U},
+                          {gigabit, kMs, 65536U, kMs, 51U, 70U, 0U},
+                          {gigabit, kMs, 65536U, 10U * kMs, 50U, 70U, 0U},
+                          {hundred_megabit, frame, 524288U, 10U * kMs, 85U, 1000U, 8U},
+                          {hundred_megabit, frame, 524288U, kMs, 90U, 1000U, 8U}};
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        for (const Path& path : paths)
+        {
+            INFO("algorithm " << static_cast<int>(algorithm) << " rate " << path.rate << " turn " << path.turn_ns
+                              << " queue " << path.queue << " one way " << path.one_way_ns);
+            crd::net::testing::Flow flow(policy_of(algorithm, true), path.rate, path.one_way_ns, path.queue);
+            flow.set_turn(path.turn_ns);
+            flow.run(10U * kSecond);
+            const CongestionState state = flow.ctl->state();
+            CHECK(state.host_turn_ns == path.turn_ns);
+            CHECK(flow.acked_bytes * 100U >= path.rate * 10U * path.percent);
+            CHECK(flow.dropped <= path.drops);
+            CHECK(state.reductions <= path.reductions);
+            // At least a train a turn, and the cap a turn's whole datagrams at most.
+            CHECK(flow.acked_bytes * path.turn_ns >= train * 10U * kSecond * 97U / 100U);
+            CHECK(state.train_cap % kMss == 0U);
+        }
+    }
+
+    // A host whose turn is under a send quantum's millisecond keeps one train a turn, whatever that turn carries at
+    // its rate (here 2.5 trains at 10 Gbit/s): the quantum covers it.
+    {
+        crd::net::testing::Flow flow(policy_of(CongestionAlgorithm::Cubic, true), 10U * gigabit, kMs, 2097152U);
+        flow.set_turn(250000U);
+        flow.run(2U * kSecond);
+        CHECK(flow.ctl->state().host_turn_ns == 250000U);
+        CHECK(flow.ctl->state().train_cap <= train);
+        CHECK(flow.ctl->burst(flow.rtt) <= train);
+    }
+
+    // A timely host stalled once for 50 ms, and a 1 ms host that turns exact, burst one train at most after.
+    for (const u64 stall : {u64{0U}, 50U * kMs})
+    {
+        INFO("stall " << stall);
+        crd::net::testing::Flow flow(policy_of(CongestionAlgorithm::Cubic, true), gigabit, kMs, 262144U);
+        flow.set_turn(stall == 0U ? kMs : 0U);
+        flow.run(2U * kSecond);
+        flow.set_turn(stall);
+        flow.run(2U * kSecond + 60U * kMs);
+        flow.set_turn(0U);
+        flow.run(3U * kSecond);
+        const CongestionState state = flow.ctl->state();
+        CHECK(state.host_turn_ns < 20000U);
+        CHECK(flow.ctl->burst(flow.rtt) <= train);
+    }
+}
